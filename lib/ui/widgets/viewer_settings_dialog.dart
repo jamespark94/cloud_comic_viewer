@@ -160,6 +160,36 @@ class ViewerSettingsDialog extends StatelessWidget {
                     visualDensity: VisualDensity.compact,
                   ),
                 ),
+
+                const SizedBox(height: 16),
+                const Text('페이지 이동 터치 방식', style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                SegmentedButton<PageNavigationMode>(
+                  segments: const [
+                    ButtonSegment(
+                      value: PageNavigationMode.leftRightTap,
+                      label: Text('좌우 탭'),
+                      icon: Icon(Icons.touch_app, size: 16),
+                    ),
+                    ButtonSegment(
+                      value: PageNavigationMode.topBottomTap,
+                      label: Text('상하 탭'),
+                      icon: Icon(Icons.swap_vert, size: 16),
+                    ),
+                    ButtonSegment(
+                      value: PageNavigationMode.swipeOnly,
+                      label: Text('스크롤만'),
+                      icon: Icon(Icons.swipe, size: 16),
+                    ),
+                  ],
+                  selected: {settings.pageNavigationMode},
+                  onSelectionChanged: (selected) {
+                    settingsService.setPageNavigationMode(selected.first);
+                  },
+                  style: const ButtonStyle(
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
               ],
 
               // 3. 이미지 화면 맞춤

@@ -469,6 +469,103 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
     );
   }
 
+  void _goToPrevious() {
+    final settings = ViewerSettingsService.instance.settings;
+    if (settings.viewerMode == ViewerMode.webtoon) {
+      if (_currentPageIndex > 0 && _itemScrollController.isAttached) {
+        final target = _currentPageIndex - 1;
+        _itemScrollController.scrollTo(
+          index: target,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      }
+    } else {
+      if (_pageController.hasClients && _currentDisplayIndex > 0) {
+        _pageController.previousPage(
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      }
+    }
+  }
+
+  void _goToNext() {
+    final settings = ViewerSettingsService.instance.settings;
+    if (settings.viewerMode == ViewerMode.webtoon) {
+      if (_currentPageIndex < _pages.length - 1 && _itemScrollController.isAttached) {
+        final target = _currentPageIndex + 1;
+        _itemScrollController.scrollTo(
+          index: target,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      }
+    } else {
+      final maxIdx = _displayItems.isNotEmpty ? _displayItems.length - 1 : _pages.length - 1;
+      if (_pageController.hasClients && _currentDisplayIndex < maxIdx) {
+        _pageController.nextPage(
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      }
+    }
+  }
+
+  void _handleViewerTap(TapUpDetails details, ViewerSettings settings, BoxConstraints constraints) {
+    if (_showControls) {
+      _toggleControls();
+      return;
+    }
+
+    final width = constraints.maxWidth;
+    final height = constraints.maxHeight;
+    final x = details.localPosition.dx;
+    final y = details.localPosition.dy;
+
+    switch (settings.pageNavigationMode) {
+      case PageNavigationMode.swipeOnly:
+        // 스와이프/스크롤 전용: 탭 시 컨트롤 토글
+        _toggleControls();
+        break;
+
+      case PageNavigationMode.leftRightTap:
+        // 좌우 30% 영역은 페이지 넘김, 중앙 40% 영역은 컨트롤 토글
+        if (x < width * 0.30) {
+          // 좌측 영역 탭
+          // 일본 출판만화(우->좌 진행)의 경우 왼쪽 탭이 '다음 페이지', 일반 만화는 '이전 페이지'
+          if (settings.readingDirection == ReadingDirection.rightToLeft) {
+            _goToNext();
+          } else {
+            _goToPrevious();
+          }
+        } else if (x > width * 0.70) {
+          // 우측 영역 탭
+          // 일본 출판만화(우->좌 진행)의 경우 오른쪽 탭이 '이전 페이지', 일반 만화는 '다음 페이지'
+          if (settings.readingDirection == ReadingDirection.rightToLeft) {
+            _goToPrevious();
+          } else {
+            _goToNext();
+          }
+        } else {
+          // 중앙 영역
+          _toggleControls();
+        }
+        break;
+
+      case PageNavigationMode.topBottomTap:
+        // 상하 30% 영역은 페이지 넘김, 중앙 40% 영역은 컨트롤 토글
+        if (y < height * 0.30) {
+          _goToPrevious();
+        } else if (y > height * 0.70) {
+          _goToNext();
+        } else {
+          _toggleControls();
+        }
+        break;
+    }
+  }
+
   Widget _buildViewerContent(ViewerSettings settings, Orientation orientation) {
     if (_isLoading) {
       return Center(
@@ -535,54 +632,58 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
       );
     }
 
-    // 웹툰 모드 (세로 스크롤)
-    if (settings.viewerMode == ViewerMode.webtoon) {
-      return GestureDetector(
-        onTap: _toggleControls,
-        child: ScrollablePositionedList.builder(
-          itemScrollController: _itemScrollController,
-          itemPositionsListener: _itemPositionsListener,
-          initialScrollIndex: _currentPageIndex,
-          itemCount: _pages.length,
-          itemBuilder: (context, index) {
-            return _buildSinglePageImage(_pages[index], settings, index);
-          },
-        ),
-      );
-    }
-
-    // 페이지 모드 (가로 넘김, 분할/합침 아이템 지원)
-    final isRtoL = settings.readingDirection == ReadingDirection.rightToLeft;
-    final itemsCount = _displayItems.isNotEmpty ? _displayItems.length : _pages.length;
-
-    return GestureDetector(
-      onTap: _toggleControls,
-      child: PageView.builder(
-        controller: _pageController,
-        reverse: isRtoL,
-        itemCount: itemsCount,
-        onPageChanged: _onDisplayPageChanged,
-        itemBuilder: (context, index) {
-          if (_displayItems.isEmpty) {
-            return Center(
-              child: InteractiveViewer(
-                minScale: 1.0,
-                maxScale: 4.0,
-                child: _buildSinglePageImage(_pages[index], settings, index),
-              ),
-            );
-          }
-
-          final item = _displayItems[index];
-          return Center(
-            child: InteractiveViewer(
-              minScale: 1.0,
-              maxScale: 4.0,
-              child: _buildDisplayItemWidget(item, settings),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // 웹툰 모드 (세로 스크롤)
+        if (settings.viewerMode == ViewerMode.webtoon) {
+          return GestureDetector(
+            onTapUp: (details) => _handleViewerTap(details, settings, constraints),
+            child: ScrollablePositionedList.builder(
+              itemScrollController: _itemScrollController,
+              itemPositionsListener: _itemPositionsListener,
+              initialScrollIndex: _currentPageIndex,
+              itemCount: _pages.length,
+              itemBuilder: (context, index) {
+                return _buildSinglePageImage(_pages[index], settings, index);
+              },
             ),
           );
-        },
-      ),
+        }
+
+        // 페이지 모드 (가로 넘김, 분할/합침 아이템 지원)
+        final isRtoL = settings.readingDirection == ReadingDirection.rightToLeft;
+        final itemsCount = _displayItems.isNotEmpty ? _displayItems.length : _pages.length;
+
+        return GestureDetector(
+          onTapUp: (details) => _handleViewerTap(details, settings, constraints),
+          child: PageView.builder(
+            controller: _pageController,
+            reverse: isRtoL,
+            itemCount: itemsCount,
+            onPageChanged: _onDisplayPageChanged,
+            itemBuilder: (context, index) {
+              if (_displayItems.isEmpty) {
+                return Center(
+                  child: InteractiveViewer(
+                    minScale: 1.0,
+                    maxScale: 4.0,
+                    child: _buildSinglePageImage(_pages[index], settings, index),
+                  ),
+                );
+              }
+
+              final item = _displayItems[index];
+              return Center(
+                child: InteractiveViewer(
+                  minScale: 1.0,
+                  maxScale: 4.0,
+                  child: _buildDisplayItemWidget(item, settings),
+                ),
+              );
+            },
+          ),
+        );
+      },
     );
   }
 

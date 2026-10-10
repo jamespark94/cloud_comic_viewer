@@ -26,6 +26,17 @@ enum PageDisplayMode {
   const PageDisplayMode(this.label, this.icon);
 }
 
+/// 페이지 넘김 탐색 방식
+enum PageNavigationMode {
+  leftRightTap('좌우 탭 이동', Icons.touch_app),
+  topBottomTap('상하 탭 이동', Icons.swap_vert),
+  swipeOnly('스크롤/스와이프만', Icons.swipe);
+
+  final String label;
+  final IconData icon;
+  const PageNavigationMode(this.label, this.icon);
+}
+
 /// 이미지 맞춤 비율
 enum FitMode {
   contain,  // 화면 전체에 비율 유지 맞춤 (여백 있음)
@@ -49,6 +60,7 @@ class ViewerSettings {
   final ReadingDirection readingDirection;
   final ViewerMode viewerMode;
   final PageDisplayMode displayMode;
+  final PageNavigationMode pageNavigationMode;
   final FitMode fitMode;
   final ViewerTheme theme;
   final bool keepScreenOn;
@@ -59,6 +71,7 @@ class ViewerSettings {
     this.readingDirection = ReadingDirection.leftToRight,
     this.viewerMode = ViewerMode.singlePage,
     this.displayMode = PageDisplayMode.auto,
+    this.pageNavigationMode = PageNavigationMode.leftRightTap,
     this.fitMode = FitMode.contain,
     this.theme = ViewerTheme.black,
     this.keepScreenOn = true,
@@ -70,6 +83,7 @@ class ViewerSettings {
     ReadingDirection? readingDirection,
     ViewerMode? viewerMode,
     PageDisplayMode? displayMode,
+    PageNavigationMode? pageNavigationMode,
     FitMode? fitMode,
     ViewerTheme? theme,
     bool? keepScreenOn,
@@ -80,6 +94,7 @@ class ViewerSettings {
       readingDirection: readingDirection ?? this.readingDirection,
       viewerMode: viewerMode ?? this.viewerMode,
       displayMode: displayMode ?? this.displayMode,
+      pageNavigationMode: pageNavigationMode ?? this.pageNavigationMode,
       fitMode: fitMode ?? this.fitMode,
       theme: theme ?? this.theme,
       keepScreenOn: keepScreenOn ?? this.keepScreenOn,
@@ -92,6 +107,7 @@ class ViewerSettings {
         'readingDirection': readingDirection.name,
         'viewerMode': viewerMode.name,
         'displayMode': displayMode.name,
+        'pageNavigationMode': pageNavigationMode.name,
         'fitMode': fitMode.name,
         'theme': theme.name,
         'keepScreenOn': keepScreenOn,
@@ -111,6 +127,10 @@ class ViewerSettings {
         displayMode: PageDisplayMode.values.firstWhere(
           (e) => e.name == json['displayMode'],
           orElse: () => PageDisplayMode.auto,
+        ),
+        pageNavigationMode: PageNavigationMode.values.firstWhere(
+          (e) => e.name == json['pageNavigationMode'],
+          orElse: () => PageNavigationMode.leftRightTap,
         ),
         fitMode: FitMode.values.firstWhere(
           (e) => e.name == json['fitMode'],

@@ -97,6 +97,39 @@ class ReadingHistoryService extends ChangeNotifier {
     notifyListeners();
   }
 
+  List<ComicReadingHistory> getAllHistories() => _histories.values.toList();
+
+  /// 원격 클라우드 히스토리 목록과 로컬 목록을 스마트 병합
+  Future<List<ComicReadingHistory>> mergeWithRemote(List<ComicReadingHistory> remoteList) async {
+    for (final remote in remoteList) {
+      final existing = _histories[remote.id];
+      if (existing == null) {
+        _histories[remote.id] = remote;
+      } else {
+        final higherPage = remote.lastPage > existing.lastPage ? remote.lastPage : existing.lastPage;
+        final maxPages = remote.totalPages > existing.totalPages ? remote.totalPages : existing.totalPages;
+        final newerTime = remote.lastReadAt.isAfter(existing.lastReadAt) ? remote.lastReadAt : existing.lastReadAt;
+        final thumb = existing.coverThumbnailUrl ?? remote.coverThumbnailUrl;
+
+        _histories[remote.id] = ComicReadingHistory(
+          id: existing.id,
+          accountId: existing.accountId,
+          accountName: existing.accountName,
+          cloudType: existing.cloudType,
+          title: existing.title,
+          parentFolderId: existing.parentFolderId ?? remote.parentFolderId,
+          lastPage: higherPage,
+          totalPages: maxPages,
+          lastReadAt: newerTime,
+          coverThumbnailUrl: thumb,
+        );
+      }
+    }
+    await _persist();
+    notifyListeners();
+    return recentList;
+  }
+
   Future<void> _persist() async {
     final prefs = await SharedPreferences.getInstance();
     final list = _histories.values.map((e) => e.toJson()).toList();

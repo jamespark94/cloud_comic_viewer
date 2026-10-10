@@ -63,6 +63,12 @@ class ViewerSettingsService extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setPageNavigationMode(PageNavigationMode mode) async {
+    _settings = _settings.copyWith(pageNavigationMode: mode);
+    await _persist();
+    notifyListeners();
+  }
+
   Future<void> toggleKeepScreenOn() async {
     _settings = _settings.copyWith(keepScreenOn: !_settings.keepScreenOn);
     await _persist();
