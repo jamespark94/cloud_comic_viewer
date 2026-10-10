@@ -4,10 +4,13 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
+import 'package:provider/provider.dart';
 import '../../models/comic_page.dart';
 import '../../models/display_page_item.dart';
 import '../../models/media_item.dart';
 import '../../models/viewer_settings.dart';
+import '../../services/account_manager.dart';
+import '../../services/cloud_history_sync_service.dart';
 import '../../services/cloud_service_interface.dart';
 import '../../services/comic_archive_service.dart';
 import '../../services/comic_cache_manager.dart';
@@ -130,6 +133,13 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
       pageIndex: _currentPageIndex,
       totalPages: _pages.length,
     );
+
+    if (mounted) {
+      try {
+        final accountMgr = context.read<AccountManager>();
+        CloudHistorySyncService.instance.scheduleAutoPush(accountMgr);
+      } catch (_) {}
+    }
   }
 
   Future<void> _loadComic() async {

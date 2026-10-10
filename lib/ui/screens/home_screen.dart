@@ -71,8 +71,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _silentSyncWithCloud() async {
+    if (!mounted) return;
     final accountMgr = context.read<AccountManager>();
-    await CloudHistorySyncService.instance.syncHistories(accountMgr);
+    await CloudHistorySyncService.instance.syncHistories(accountMgr, silent: true);
   }
 
   Future<void> _manualSyncWithCloud(BuildContext context) async {
@@ -96,7 +97,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           backgroundColor: const Color(0xFF222B38),
           behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 3),
+          duration: const Duration(seconds: 4),
         ),
       );
     }
@@ -104,6 +105,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isNarrow = screenWidth < 460;
+
     return AnimatedBuilder(
       animation: CloudHistorySyncService.instance,
       builder: (context, _) {
@@ -111,21 +115,29 @@ class _HomeScreenState extends State<HomeScreen> {
 
         return Scaffold(
           appBar: AppBar(
-            title: const Row(
+            titleSpacing: 12,
+            title: Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.auto_stories, color: Colors.blueAccent),
-                SizedBox(width: 10),
-                Text('Cloud Comic Viewer', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                const Icon(Icons.auto_stories, color: Colors.blueAccent, size: 22),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    isNarrow ? '만화 뷰어' : 'Cloud Comic Viewer',
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                ),
               ],
             ),
             actions: [
-              // 1. 윈도우 탐색기 스타일 보기 옵션 드롭다운 메뉴
+              // 1. 윈도우 탐색기 스타일 보기 옵션 드롭다운 메뉴 (좁은 화면에서는 컴팩트 표시)
               PopupMenuButton<HomeViewMode>(
                 tooltip: '보기 옵션 (${_viewMode.label})',
                 onSelected: _changeViewMode,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  margin: const EdgeInsets.symmetric(vertical: 8),
+                  padding: EdgeInsets.symmetric(horizontal: isNarrow ? 7 : 9, vertical: 5),
+                  margin: const EdgeInsets.symmetric(vertical: 9),
                   decoration: BoxDecoration(
                     color: Colors.white.withAlpha(15),
                     borderRadius: BorderRadius.circular(8),
@@ -134,14 +146,16 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(_viewMode.icon, size: 18, color: Colors.blueAccent),
-                      const SizedBox(width: 6),
-                      Text(
-                        _viewMode.label,
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                      ),
+                      Icon(_viewMode.icon, size: 16, color: Colors.blueAccent),
+                      if (!isNarrow) ...[
+                        const SizedBox(width: 5),
+                        Text(
+                          _viewMode.label,
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                        ),
+                      ],
                       const SizedBox(width: 2),
-                      const Icon(Icons.arrow_drop_down, size: 18, color: Colors.white70),
+                      const Icon(Icons.arrow_drop_down, size: 16, color: Colors.white70),
                     ],
                   ),
                 ),
@@ -153,10 +167,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       children: [
                         Icon(
                           mode.icon,
-                          size: 20,
+                          size: 18,
                           color: isSelected ? Colors.blueAccent : Colors.white70,
                         ),
-                        const SizedBox(width: 12),
+                        const SizedBox(width: 10),
                         Text(
                           mode.label,
                           style: TextStyle(
@@ -165,7 +179,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         ),
                         const Spacer(),
-                        if (isSelected) const Icon(Icons.check, size: 18, color: Colors.blueAccent),
+                        if (isSelected) const Icon(Icons.check, size: 16, color: Colors.blueAccent),
                       ],
                     ),
                   );
@@ -174,13 +188,16 @@ class _HomeScreenState extends State<HomeScreen> {
 
               // 2. 디바이스 간 히스토리 동기화 버튼
               IconButton(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.all(8),
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                 icon: syncService.isSyncing
                     ? const SizedBox(
-                        width: 18,
-                        height: 18,
+                        width: 16,
+                        height: 16,
                         child: CircularProgressIndicator(strokeWidth: 2, color: Colors.blueAccent),
                       )
-                    : const Icon(Icons.sync, color: Colors.blueAccent),
+                    : const Icon(Icons.sync, color: Colors.blueAccent, size: 21),
                 tooltip: syncService.isSyncing
                     ? '클라우드 히스토리 동기화 중...'
                     : (syncService.lastSyncTime != null
@@ -191,7 +208,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
               // 3. 새 클라우드 계정 추가 버튼
               IconButton(
-                icon: const Icon(Icons.add_circle_outline, color: Colors.blueAccent),
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.all(8),
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                icon: const Icon(Icons.add_circle_outline, color: Colors.blueAccent, size: 21),
                 tooltip: '새 클라우드 계정 추가',
                 onPressed: () {
                   showDialog(
@@ -200,7 +220,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   );
                 },
               ),
-              const SizedBox(width: 6),
+              const SizedBox(width: 4),
             ],
           ),
           body: RefreshIndicator(
@@ -281,7 +301,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     case HomeViewMode.list:
                       return _buildRecentList(context, recentList, historyService);
                     case HomeViewMode.details:
-                      return _buildRecentDetailsTable(context, recentList, historyService);
+                      return _buildRecentDetailsTable(context, recentList, historyService, constraints.maxWidth);
                   }
                 },
               ),
@@ -294,7 +314,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _openComicFromHistory(BuildContext context, ComicReadingHistory history) {
     final accountMgr = context.read<AccountManager>();
-    final account = accountMgr.getAccountById(history.accountId) ?? AccountManager.localAccount;
+    // 타 기기에서 동기화된 계정 ID도 스마트 매칭
+    final account = accountMgr.findMatchingAccount(
+      accountId: history.accountId,
+      cloudType: history.cloudType,
+    );
     final service = accountMgr.getService(account);
 
     final item = MediaItem(
@@ -315,7 +339,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     ).then((_) {
       // 뷰어 종료 시 최신 진도를 백그라운드로 클라우드에 자동 동기화 푸시
-      CloudHistorySyncService.instance.syncHistories(accountMgr);
+      CloudHistorySyncService.instance.syncHistories(accountMgr, silent: true);
     });
   }
 
@@ -348,7 +372,6 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // 표지 이미지 (만화책 표지 비율)
                 Expanded(
                   child: ClipRRect(
                     borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
@@ -537,12 +560,14 @@ class _HomeScreenState extends State<HomeScreen> {
                   : const Icon(Icons.auto_stories, color: Colors.blueAccent, size: 18),
             ),
           ),
-          title: Text(history.title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+          title: Text(history.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
           subtitle: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 '${history.accountName} · 열람: ${_dateFormat.format(history.lastReadAt)}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(color: Colors.white38, fontSize: 11),
               ),
               const SizedBox(height: 4),
@@ -565,8 +590,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 textAlign: TextAlign.right,
                 style: const TextStyle(color: Colors.blueAccent, fontSize: 11, fontWeight: FontWeight.bold),
               ),
-              const SizedBox(width: 6),
+              const SizedBox(width: 4),
               IconButton(
+                visualDensity: VisualDensity.compact,
                 icon: const Icon(Icons.close, size: 18, color: Colors.white38),
                 onPressed: () => historyService.removeHistory(history.id),
               ),
@@ -578,13 +604,17 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // 자세히 보기: 탐색기 표(Table) 스타일
+  // 자세히 보기: 화면 100% 폭에 맞춘 반응형 탐색기 테이블 뷰 (좌우 스크롤 불필요)
   Widget _buildRecentDetailsTable(
     BuildContext context,
     List<ComicReadingHistory> list,
     ReadingHistoryService historyService,
+    double maxWidth,
   ) {
+    final showAccount = maxWidth > 500;
+
     return Container(
+      width: double.infinity,
       decoration: BoxDecoration(
         color: const Color(0xFF1B202B),
         borderRadius: BorderRadius.circular(10),
@@ -592,71 +622,129 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(10),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: DataTable(
-            headingRowColor: WidgetStateProperty.all(Colors.white.withAlpha(12)),
-            columnSpacing: 20,
-            horizontalMargin: 16,
-            columns: const [
-              DataColumn(label: Text('표지', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70))),
-              DataColumn(label: Text('제목', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70))),
-              DataColumn(label: Text('저장소', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70))),
-              DataColumn(label: Text('진도', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70))),
-              DataColumn(label: Text('최근 열람 일시', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70))),
-              DataColumn(label: Text('삭제', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70))),
-            ],
-            rows: list.map((history) {
-              final hasThumb = history.coverThumbnailUrl != null && File(history.coverThumbnailUrl!).existsSync();
-              return DataRow(
-                onSelectChanged: (_) => _openComicFromHistory(context, history),
-                cells: [
-                  DataCell(
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: Container(
-                        width: 24,
-                        height: 32,
-                        color: Colors.black26,
-                        child: hasThumb
-                            ? Image.file(File(history.coverThumbnailUrl!), fit: BoxFit.cover)
-                            : const Icon(Icons.auto_stories, color: Colors.blueAccent, size: 14),
-                      ),
-                    ),
+        child: Column(
+          children: [
+            // 테이블 헤더
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              color: Colors.white.withAlpha(12),
+              child: Row(
+                children: [
+                  const Expanded(
+                    flex: 5,
+                    child: Text('제목 / 작품명', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70, fontSize: 12)),
                   ),
-                  DataCell(
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 200),
-                      child: Text(
-                        history.title,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-                      ),
+                  if (showAccount)
+                    const Expanded(
+                      flex: 3,
+                      child: Text('저장소', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70, fontSize: 12)),
                     ),
+                  const Expanded(
+                    flex: 3,
+                    child: Text('진도', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70, fontSize: 12)),
                   ),
-                  DataCell(Text(history.accountName, style: const TextStyle(color: Colors.white60, fontSize: 12))),
-                  DataCell(
-                    Text(
-                      '${history.lastPage + 1}/${history.totalPages}p (${history.progressPercent}%)',
-                      style: const TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 12),
-                    ),
+                  const Expanded(
+                    flex: 3,
+                    child: Text('열람 일시', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70, fontSize: 12)),
                   ),
-                  DataCell(
-                    Text(
-                      _dateFormat.format(history.lastReadAt),
-                      style: const TextStyle(color: Colors.white54, fontSize: 11),
-                    ),
-                  ),
-                  DataCell(
-                    IconButton(
-                      icon: const Icon(Icons.close, size: 16, color: Colors.white38),
-                      onPressed: () => historyService.removeHistory(history.id),
+                  const SizedBox(
+                    width: 32,
+                    child: Center(
+                      child: Text('삭제', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70, fontSize: 11)),
                     ),
                   ),
                 ],
-              );
-            }).toList(),
-          ),
+              ),
+            ),
+            const Divider(height: 1, color: Colors.white12),
+            // 테이블 행 목록
+            ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: list.length,
+              separatorBuilder: (_, _) => const Divider(height: 1, color: Colors.white10),
+              itemBuilder: (context, index) {
+                final history = list[index];
+                final hasThumb = history.coverThumbnailUrl != null && File(history.coverThumbnailUrl!).existsSync();
+
+                return InkWell(
+                  onTap: () => _openComicFromHistory(context, history),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    child: Row(
+                      children: [
+                        // 제목 및 표지
+                        Expanded(
+                          flex: 5,
+                          child: Row(
+                            children: [
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(4),
+                                child: Container(
+                                  width: 22,
+                                  height: 30,
+                                  color: Colors.black26,
+                                  child: hasThumb
+                                      ? Image.file(File(history.coverThumbnailUrl!), fit: BoxFit.cover)
+                                      : const Icon(Icons.auto_stories, color: Colors.blueAccent, size: 14),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  history.title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (showAccount)
+                          Expanded(
+                            flex: 3,
+                            child: Text(
+                              history.accountName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: Colors.white60, fontSize: 11),
+                            ),
+                          ),
+                        Expanded(
+                          flex: 3,
+                          child: Text(
+                            '${history.lastPage + 1}/${history.totalPages}p (${history.progressPercent}%)',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 11),
+                          ),
+                        ),
+                        Expanded(
+                          flex: 3,
+                          child: Text(
+                            _dateFormat.format(history.lastReadAt),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: Colors.white54, fontSize: 10),
+                          ),
+                        ),
+                        SizedBox(
+                          width: 32,
+                          child: IconButton(
+                            padding: EdgeInsets.zero,
+                            visualDensity: VisualDensity.compact,
+                            icon: const Icon(Icons.close, size: 16, color: Colors.white38),
+                            onPressed: () => historyService.removeHistory(history.id),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
         ),
       ),
     );
@@ -697,7 +785,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     case HomeViewMode.list:
                       return _buildShortcutsList(context, shortcuts, shortcutMgr);
                     case HomeViewMode.details:
-                      return _buildShortcutsDetailsTable(context, shortcuts, shortcutMgr);
+                      return _buildShortcutsDetailsTable(context, shortcuts, shortcutMgr, constraints.maxWidth);
                   }
                 },
               ),
@@ -834,6 +922,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
                 IconButton(
+                  visualDensity: VisualDensity.compact,
                   icon: const Icon(Icons.close, size: 16, color: Colors.white38),
                   onPressed: () => shortcutMgr.removeShortcut(sc.id),
                 ),
@@ -864,7 +953,7 @@ class _HomeScreenState extends State<HomeScreen> {
             side: const BorderSide(color: Colors.white10),
           ),
           leading: const Icon(Icons.folder_special, color: Colors.amber, size: 28),
-          title: Text(sc.folderName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+          title: Text(sc.folderName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
           subtitle: Text(
             '${sc.accountName} · ${sc.folderPath ?? ""}',
             maxLines: 1,
@@ -872,6 +961,7 @@ class _HomeScreenState extends State<HomeScreen> {
             style: const TextStyle(color: Colors.white38, fontSize: 11),
           ),
           trailing: IconButton(
+            visualDensity: VisualDensity.compact,
             icon: const Icon(Icons.close, size: 18, color: Colors.white38),
             onPressed: () => shortcutMgr.removeShortcut(sc.id),
           ),
@@ -881,12 +971,17 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // 화면 폭 100% 꽉 채우는 반응형 바로가기 테이블 뷰
   Widget _buildShortcutsDetailsTable(
     BuildContext context,
     List<FolderShortcut> shortcuts,
     FolderShortcutManager shortcutMgr,
+    double maxWidth,
   ) {
+    final showAccount = maxWidth > 480;
+
     return Container(
+      width: double.infinity,
       decoration: BoxDecoration(
         color: const Color(0xFF1B202B),
         borderRadius: BorderRadius.circular(10),
@@ -894,52 +989,101 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(10),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: DataTable(
-            headingRowColor: WidgetStateProperty.all(Colors.white.withAlpha(12)),
-            columnSpacing: 20,
-            horizontalMargin: 16,
-            columns: const [
-              DataColumn(label: Text('폴더명', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70))),
-              DataColumn(label: Text('연결 계정', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70))),
-              DataColumn(label: Text('경로/ID', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70))),
-              DataColumn(label: Text('동작', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70))),
-            ],
-            rows: shortcuts.map((sc) {
-              return DataRow(
-                onSelectChanged: (_) => _openShortcut(context, sc),
-                cells: [
-                  DataCell(
-                    Row(
-                      children: [
-                        const Icon(Icons.folder_special, color: Colors.amber, size: 18),
-                        const SizedBox(width: 8),
-                        Text(sc.folderName, style: const TextStyle(fontWeight: FontWeight.bold)),
-                      ],
-                    ),
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              color: Colors.white.withAlpha(12),
+              child: Row(
+                children: [
+                  const Expanded(
+                    flex: 5,
+                    child: Text('폴더명', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70, fontSize: 12)),
                   ),
-                  DataCell(Text(sc.accountName, style: const TextStyle(color: Colors.white60))),
-                  DataCell(
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 240),
-                      child: Text(
-                        sc.folderPath ?? sc.folderId,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: Colors.white38, fontSize: 11),
-                      ),
+                  if (showAccount)
+                    const Expanded(
+                      flex: 3,
+                      child: Text('연결 계정', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70, fontSize: 12)),
                     ),
+                  const Expanded(
+                    flex: 5,
+                    child: Text('경로 / 식별자', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70, fontSize: 12)),
                   ),
-                  DataCell(
-                    IconButton(
-                      icon: const Icon(Icons.close, size: 16, color: Colors.white38),
-                      onPressed: () => shortcutMgr.removeShortcut(sc.id),
+                  const SizedBox(
+                    width: 32,
+                    child: Center(
+                      child: Text('삭제', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70, fontSize: 11)),
                     ),
                   ),
                 ],
-              );
-            }).toList(),
-          ),
+              ),
+            ),
+            const Divider(height: 1, color: Colors.white12),
+            ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: shortcuts.length,
+              separatorBuilder: (_, _) => const Divider(height: 1, color: Colors.white10),
+              itemBuilder: (context, index) {
+                final sc = shortcuts[index];
+                return InkWell(
+                  onTap: () => _openShortcut(context, sc),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          flex: 5,
+                          child: Row(
+                            children: [
+                              const Icon(Icons.folder_special, color: Colors.amber, size: 18),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  sc.folderName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (showAccount)
+                          Expanded(
+                            flex: 3,
+                            child: Text(
+                              sc.accountName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: Colors.white60, fontSize: 11),
+                            ),
+                          ),
+                        Expanded(
+                          flex: 5,
+                          child: Text(
+                            sc.folderPath ?? sc.folderId,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: Colors.white38, fontSize: 11),
+                          ),
+                        ),
+                        SizedBox(
+                          width: 32,
+                          child: IconButton(
+                            padding: EdgeInsets.zero,
+                            visualDensity: VisualDensity.compact,
+                            icon: const Icon(Icons.close, size: 16, color: Colors.white38),
+                            onPressed: () => shortcutMgr.removeShortcut(sc.id),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
         ),
       ),
     );
@@ -981,7 +1125,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         case HomeViewMode.list:
                           return _buildStorageList(context, accounts, accountMgr);
                         case HomeViewMode.details:
-                          return _buildStorageDetailsTable(context, accounts, accountMgr);
+                          return _buildStorageDetailsTable(context, accounts, accountMgr, constraints.maxWidth);
                       }
                     },
                   ),
@@ -1008,8 +1152,13 @@ class _HomeScreenState extends State<HomeScreen> {
                         children: [
                           Icon(Icons.add, color: Colors.blueAccent, size: 20),
                           SizedBox(width: 8),
-                          Text('새 클라우드 연결 (구글, 원드라이브, Box, Dropbox, WebDAV)',
-                              style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 13)),
+                          Flexible(
+                            child: Text(
+                              '새 클라우드 연결 (구글, 원드라이브, Box, Dropbox, WebDAV)',
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 13),
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -1207,14 +1356,17 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             child: Icon(icon, color: color, size: 22),
           ),
-          title: Text(acc.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+          title: Text(acc.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
           subtitle: Text(
             isLocal ? '로컬 스토리지' : acc.email,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: const TextStyle(color: Colors.white38, fontSize: 11),
           ),
           trailing: isLocal
               ? const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.white24)
               : IconButton(
+                  visualDensity: VisualDensity.compact,
                   icon: const Icon(Icons.delete_outline, size: 18, color: Colors.white38),
                   tooltip: '연결 해제',
                   onPressed: () => _confirmDeleteAccount(context, acc, accountMgr),
@@ -1225,12 +1377,15 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // 화면 폭 100% 꽉 채우는 반응형 저장소 테이블 뷰
   Widget _buildStorageDetailsTable(
     BuildContext context,
     List<CloudAccount> accounts,
     AccountManager accountMgr,
+    double maxWidth,
   ) {
     return Container(
+      width: double.infinity,
       decoration: BoxDecoration(
         color: const Color(0xFF1B202B),
         borderRadius: BorderRadius.circular(10),
@@ -1238,48 +1393,104 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(10),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: DataTable(
-            headingRowColor: WidgetStateProperty.all(Colors.white.withAlpha(12)),
-            columnSpacing: 20,
-            horizontalMargin: 16,
-            columns: const [
-              DataColumn(label: Text('스토리지명', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70))),
-              DataColumn(label: Text('서비스 종류', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70))),
-              DataColumn(label: Text('계정/식별자', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70))),
-              DataColumn(label: Text('동작', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70))),
-            ],
-            rows: accounts.map((acc) {
-              final (icon, color) = _getAccountIconAndColor(acc.type);
-              final isLocal = acc.type == CloudType.local;
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              color: Colors.white.withAlpha(12),
+              child: const Row(
+                children: [
+                  Expanded(
+                    flex: 4,
+                    child: Text('스토리지명', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70, fontSize: 12)),
+                  ),
+                  Expanded(
+                    flex: 3,
+                    child: Text('서비스 종류', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70, fontSize: 12)),
+                  ),
+                  Expanded(
+                    flex: 4,
+                    child: Text('계정 / 식별자', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70, fontSize: 12)),
+                  ),
+                  SizedBox(
+                    width: 32,
+                    child: Center(
+                      child: Text('동작', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70, fontSize: 11)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1, color: Colors.white12),
+            ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: accounts.length,
+              separatorBuilder: (_, _) => const Divider(height: 1, color: Colors.white10),
+              itemBuilder: (context, index) {
+                final acc = accounts[index];
+                final (icon, color) = _getAccountIconAndColor(acc.type);
+                final isLocal = acc.type == CloudType.local;
 
-              return DataRow(
-                onSelectChanged: (_) => _openStorage(context, acc, accountMgr),
-                cells: [
-                  DataCell(
-                    Row(
+                return InkWell(
+                  onTap: () => _openStorage(context, acc, accountMgr),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    child: Row(
                       children: [
-                        Icon(icon, color: color, size: 18),
-                        const SizedBox(width: 8),
-                        Text(acc.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                        Expanded(
+                          flex: 4,
+                          child: Row(
+                            children: [
+                              Icon(icon, color: color, size: 18),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  acc.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Expanded(
+                          flex: 3,
+                          child: Text(
+                            acc.type.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: Colors.white60, fontSize: 11),
+                          ),
+                        ),
+                        Expanded(
+                          flex: 4,
+                          child: Text(
+                            isLocal ? '내 컴퓨터' : acc.email,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: Colors.white38, fontSize: 11),
+                          ),
+                        ),
+                        SizedBox(
+                          width: 32,
+                          child: isLocal
+                              ? const SizedBox.shrink()
+                              : IconButton(
+                                  padding: EdgeInsets.zero,
+                                  visualDensity: VisualDensity.compact,
+                                  icon: const Icon(Icons.delete_outline, size: 16, color: Colors.white38),
+                                  onPressed: () => _confirmDeleteAccount(context, acc, accountMgr),
+                                ),
+                        ),
                       ],
                     ),
                   ),
-                  DataCell(Text(acc.type.name, style: const TextStyle(color: Colors.white60))),
-                  DataCell(Text(isLocal ? '내 컴퓨터' : acc.email, style: const TextStyle(color: Colors.white38))),
-                  DataCell(
-                    isLocal
-                        ? const SizedBox.shrink()
-                        : IconButton(
-                            icon: const Icon(Icons.delete_outline, size: 16, color: Colors.white38),
-                            onPressed: () => _confirmDeleteAccount(context, acc, accountMgr),
-                          ),
-                  ),
-                ],
-              );
-            }).toList(),
-          ),
+                );
+              },
+            ),
+          ],
         ),
       ),
     );

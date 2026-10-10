@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -8,7 +9,7 @@ import 'cloud_service_interface.dart';
 import 'reading_history_service.dart';
 
 /// 클라우드 기반 디바이스 간 열람 기록(히스토리) 동기화 서비스
-/// 클라우드 스토리지의 `.comic_sync/reading_history.json` 파일을 사용하여
+/// 클라우드 스토리지 루트의 `reading_history.json` 파일을 사용하여
 /// PC, 태블릿, 스마트폰 등 다중 기기 간 만화책 읽기 진도를 자동/수동 동기화합니다.
 class CloudHistorySyncService extends ChangeNotifier {
   static CloudHistorySyncService? _instance;
@@ -16,7 +17,6 @@ class CloudHistorySyncService extends ChangeNotifier {
 
   CloudHistorySyncService._();
 
-  static const String syncFolderName = '.comic_sync';
   static const String syncFileName = 'reading_history.json';
 
   bool _isSyncing = false;
@@ -28,8 +28,18 @@ class CloudHistorySyncService extends ChangeNotifier {
   String? _lastSyncMessage;
   String? get lastSyncMessage => _lastSyncMessage;
 
+  Timer? _autoPushDebounceTimer;
+
+  /// 진도 변경 시 3초 후 백그라운드로 자동 클라우드 푸시 예약
+  void scheduleAutoPush(AccountManager accountManager) {
+    _autoPushDebounceTimer?.cancel();
+    _autoPushDebounceTimer = Timer(const Duration(seconds: 3), () {
+      syncHistories(accountManager, silent: true);
+    });
+  }
+
   /// 연결된 클라우드 계정과 동기화 실행 (Pull & Merge -> Push)
-  Future<bool> syncHistories(AccountManager accountManager) async {
+  Future<bool> syncHistories(AccountManager accountManager, {bool silent = false}) async {
     if (_isSyncing) return false;
 
     final cloudAccounts = accountManager.accounts.where((a) => a.type != CloudType.local).toList();
@@ -40,18 +50,25 @@ class CloudHistorySyncService extends ChangeNotifier {
     }
 
     _isSyncing = true;
-    _lastSyncMessage = '클라우드 히스토리 동기화 중...';
-    notifyListeners();
+    if (!silent) {
+      _lastSyncMessage = '클라우드 히스토리 동기화 중...';
+      notifyListeners();
+    }
 
     bool anySuccess = false;
     int mergedCount = 0;
+    String? permissionWarning;
 
     for (final account in cloudAccounts) {
       try {
         final service = accountManager.getService(account);
-        await service.refreshTokensIfNeeded();
+        final tokenOk = await service.refreshTokensIfNeeded();
+        if (!tokenOk && account.type != CloudType.webDav) {
+          debugPrint('[CloudSync] ${account.name} 토큰 갱신 실패');
+          continue;
+        }
 
-        // 1. 원격 히스토리 파일 가져오기
+        // 1. 원격 히스토리 파일 가져오기 (루트 reading_history.json 우선, 없으면 .comic_sync/ 폴더 확인)
         final remoteJsonStr = await _fetchRemoteHistoryJson(service, account);
         List<ComicReadingHistory> remoteHistories = [];
 
@@ -60,37 +77,46 @@ class CloudHistorySyncService extends ChangeNotifier {
             final data = jsonDecode(remoteJsonStr);
             final List<dynamic> list = data is Map ? (data['histories'] as List<dynamic>? ?? []) : (data as List<dynamic>);
             remoteHistories = list.map((e) => ComicReadingHistory.fromJson(e as Map<String, dynamic>)).toList();
+            debugPrint('[CloudSync] 원격 히스토리 ${remoteHistories.length}개 로드 성공 (${account.name})');
           } catch (e) {
             debugPrint('[CloudSync] 원격 JSON 파싱 실패: $e');
           }
+        } else {
+          debugPrint('[CloudSync] 원격 히스토리 파일 없음 또는 신규 생성 대상 (${account.name})');
         }
 
         // 2. 로컬 히스토리와 스마트 병합
         final mergedList = await ReadingHistoryService.instance.mergeWithRemote(remoteHistories);
         mergedCount = mergedList.length;
 
-        // 3. 최신 병합본을 원격 클라우드에 업로드
+        // 3. 최신 병합본을 원격 클라우드 루트에 업로드
         final syncData = {
           'version': 1,
+          'device': defaultTargetPlatform.name,
           'updatedAt': DateTime.now().toUtc().toIso8601String(),
           'count': mergedList.length,
           'histories': mergedList.map((e) => e.toJson()).toList(),
         };
         final payload = jsonEncode(syncData);
-        final uploadOk = await _uploadRemoteHistoryJson(service, account, payload);
+        final uploadResult = await _uploadRemoteHistoryJson(service, account, payload);
 
-        if (uploadOk) {
+        if (uploadResult.success) {
           anySuccess = true;
+          debugPrint('[CloudSync] 클라우드 동기화 푸시 완료 (${account.name})');
+        } else if (uploadResult.isPermissionError) {
+          permissionWarning = '${account.name}의 쓰기 권한이 없습니다. 계정을 다시 연결해 주세요.';
         }
-      } catch (e) {
-        debugPrint('[CloudSync] 계정(${account.name}) 동기화 중 예외: $e');
+      } catch (e, stack) {
+        debugPrint('[CloudSync] 계정(${account.name}) 동기화 중 예외: $e\n$stack');
       }
     }
 
     _isSyncing = false;
     if (anySuccess) {
       _lastSyncTime = DateTime.now();
-      _lastSyncMessage = '동기화 완료 ($mergedCount개 작품 진도 동기화됨)';
+      _lastSyncMessage = '동기화 완료 ($mergedCount개 작품 동기화됨)';
+    } else if (permissionWarning != null) {
+      _lastSyncMessage = permissionWarning;
     } else {
       _lastSyncMessage = '동기화 실패: 네트워크 상태 또는 클라우드 연결을 확인해 주세요.';
     }
@@ -119,7 +145,11 @@ class CloudHistorySyncService extends ChangeNotifier {
   // ============================================================
   // 각 클라우드 스토리지별 원격 히스토리 쓰기 (Upload)
   // ============================================================
-  Future<bool> _uploadRemoteHistoryJson(CloudService service, CloudAccount account, String jsonPayload) async {
+  Future<({bool success, bool isPermissionError})> _uploadRemoteHistoryJson(
+    CloudService service,
+    CloudAccount account,
+    String jsonPayload,
+  ) async {
     switch (account.type) {
       case CloudType.googleDrive:
         return await _uploadGoogleDrive(service, account, jsonPayload);
@@ -130,123 +160,117 @@ class CloudHistorySyncService extends ChangeNotifier {
       case CloudType.dropbox:
         return await _uploadDropbox(service, account, jsonPayload);
       default:
-        return false;
+        return (success: false, isPermissionError: false);
     }
   }
 
   // ------------------------------------------------------------
-  // Google Drive 구현
+  // Google Drive 구현 (루트 저장 및 읽기)
   // ------------------------------------------------------------
   Future<String?> _fetchGoogleDrive(CloudService service, CloudAccount account) async {
     final headers = await service.getStreamHeaders();
 
-    // 1. '.comic_sync' 폴더 검색
-    final folderQuery = Uri.encodeComponent("name = '$syncFolderName' and mimeType = 'application/vnd.google-apps.folder' and trashed = false");
-    final folderRes = await http.get(
-      Uri.parse('https://www.googleapis.com/drive/v3/files?q=$folderQuery&fields=files(id)'),
-      headers: headers,
-    );
-    if (folderRes.statusCode != 200) return null;
-    final folderFiles = (jsonDecode(folderRes.body)['files'] as List<dynamic>? ?? []);
-    if (folderFiles.isEmpty) return null;
-    final folderId = folderFiles.first['id'] as String;
+    // 1. 루트의 'reading_history.json' 검색
+    final uri = Uri.https('www.googleapis.com', '/drive/v3/files', {
+      'q': "name = '$syncFileName' and trashed = false and 'root' in parents",
+      'fields': 'files(id, name)',
+    });
 
-    // 2. 'reading_history.json' 파일 검색
-    final fileQuery = Uri.encodeComponent("'$folderId' in parents and name = '$syncFileName' and trashed = false");
-    final fileRes = await http.get(
-      Uri.parse('https://www.googleapis.com/drive/v3/files?q=$fileQuery&fields=files(id)'),
-      headers: headers,
-    );
-    if (fileRes.statusCode != 200) return null;
-    final files = (jsonDecode(fileRes.body)['files'] as List<dynamic>? ?? []);
-    if (files.isEmpty) return null;
-    final fileId = files.first['id'] as String;
-
-    // 3. 파일 내용 다운로드
-    final downloadRes = await http.get(
-      Uri.parse('https://www.googleapis.com/drive/v3/files/$fileId?alt=media'),
-      headers: headers,
-    );
-    if (downloadRes.statusCode == 200) {
-      return utf8.decode(downloadRes.bodyBytes);
+    final res = await http.get(uri, headers: headers);
+    if (res.statusCode == 200) {
+      final files = (jsonDecode(res.body)['files'] as List<dynamic>? ?? []);
+      if (files.isNotEmpty) {
+        final fileId = files.first['id'] as String;
+        final downloadRes = await http.get(
+          Uri.parse('https://www.googleapis.com/drive/v3/files/$fileId?alt=media'),
+          headers: headers,
+        );
+        if (downloadRes.statusCode == 200) {
+          return utf8.decode(downloadRes.bodyBytes);
+        }
+      }
     }
+
+    // 2. 하위 호환: 기존 .comic_sync/reading_history.json 파일이 있는지 확인
+    try {
+      final legacyUri = Uri.https('www.googleapis.com', '/drive/v3/files', {
+        'q': "name = '$syncFileName' and trashed = false",
+        'fields': 'files(id, name)',
+      });
+      final legacyRes = await http.get(legacyUri, headers: headers);
+      if (legacyRes.statusCode == 200) {
+        final files = (jsonDecode(legacyRes.body)['files'] as List<dynamic>? ?? []);
+        if (files.isNotEmpty) {
+          final fileId = files.first['id'] as String;
+          final downloadRes = await http.get(
+            Uri.parse('https://www.googleapis.com/drive/v3/files/$fileId?alt=media'),
+            headers: headers,
+          );
+          if (downloadRes.statusCode == 200) {
+            return utf8.decode(downloadRes.bodyBytes);
+          }
+        }
+      }
+    } catch (_) {}
+
     return null;
   }
 
-  Future<bool> _uploadGoogleDrive(CloudService service, CloudAccount account, String payload) async {
+  Future<({bool success, bool isPermissionError})> _uploadGoogleDrive(
+    CloudService service,
+    CloudAccount account,
+    String payload,
+  ) async {
     final headers = await service.getStreamHeaders();
 
-    // 1. '.comic_sync' 폴더 확인 또는 생성
-    String? folderId;
-    final folderQuery = Uri.encodeComponent("name = '$syncFolderName' and mimeType = 'application/vnd.google-apps.folder' and trashed = false");
-    final folderRes = await http.get(
-      Uri.parse('https://www.googleapis.com/drive/v3/files?q=$folderQuery&fields=files(id)'),
-      headers: headers,
-    );
-    if (folderRes.statusCode == 200) {
-      final folderFiles = (jsonDecode(folderRes.body)['files'] as List<dynamic>? ?? []);
-      if (folderFiles.isNotEmpty) {
-        folderId = folderFiles.first['id'] as String;
-      }
+    // 1. 루트의 기존 'reading_history.json' 파일 검색
+    String? fileId;
+    final searchUri = Uri.https('www.googleapis.com', '/drive/v3/files', {
+      'q': "name = '$syncFileName' and trashed = false",
+      'fields': 'files(id, name)',
+    });
+
+    final searchRes = await http.get(searchUri, headers: headers);
+    if (searchRes.statusCode == 401 || searchRes.statusCode == 403) {
+      debugPrint('[CloudSync] 구글 드라이브 권한 오류: ${searchRes.statusCode} ${searchRes.body}');
+      return (success: false, isPermissionError: true);
     }
 
-    if (folderId == null) {
-      // 폴더 신규 생성
-      final createFolderRes = await http.post(
-        Uri.parse('https://www.googleapis.com/drive/v3/files'),
-        headers: {
-          ...headers,
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({
-          'name': syncFolderName,
-          'mimeType': 'application/vnd.google-apps.folder',
-        }),
-      );
-      if (createFolderRes.statusCode == 200 || createFolderRes.statusCode == 201) {
-        folderId = jsonDecode(createFolderRes.body)['id'] as String;
-      } else {
-        return false;
-      }
-    }
-
-    // 2. 파일 존재 여부 확인
-    String? existingFileId;
-    final fileQuery = Uri.encodeComponent("'$folderId' in parents and name = '$syncFileName' and trashed = false");
-    final fileRes = await http.get(
-      Uri.parse('https://www.googleapis.com/drive/v3/files?q=$fileQuery&fields=files(id)'),
-      headers: headers,
-    );
-    if (fileRes.statusCode == 200) {
-      final files = (jsonDecode(fileRes.body)['files'] as List<dynamic>? ?? []);
+    if (searchRes.statusCode == 200) {
+      final files = (jsonDecode(searchRes.body)['files'] as List<dynamic>? ?? []);
       if (files.isNotEmpty) {
-        existingFileId = files.first['id'] as String;
+        fileId = files.first['id'] as String;
       }
     }
 
-    if (existingFileId != null) {
-      // 기존 파일 업데이트 (PATCH media)
+    if (fileId != null) {
+      // 2. 기존 파일 내용 덮어쓰기 (PATCH)
       final updateRes = await http.patch(
-        Uri.parse('https://www.googleapis.com/upload/drive/v3/files/$existingFileId?uploadType=media'),
+        Uri.parse('https://www.googleapis.com/upload/drive/v3/files/$fileId?uploadType=media'),
         headers: {
           ...headers,
           'Content-Type': 'application/json; charset=utf-8',
         },
         body: utf8.encode(payload),
       );
-      return updateRes.statusCode == 200;
+      if (updateRes.statusCode == 200) {
+        return (success: true, isPermissionError: false);
+      }
+      debugPrint('[CloudSync] 구글 드라이브 파일 갱신 실패: ${updateRes.statusCode} ${updateRes.body}');
+      final isPerm = updateRes.statusCode == 401 || updateRes.statusCode == 403;
+      return (success: false, isPermissionError: isPerm);
     } else {
-      // 신규 파일 생성 (Multipart 업로드)
-      final boundary = '----WebKitFormBoundary${DateTime.now().millisecondsSinceEpoch}';
+      // 3. 신규 파일 루트에 생성 (Multipart 업로드)
+      final boundary = 'boundary_${DateTime.now().millisecondsSinceEpoch}';
       final metadata = jsonEncode({
         'name': syncFileName,
-        'parents': [folderId],
+        'parents': ['root'],
         'mimeType': 'application/json',
       });
 
       final bodyBytes = <int>[
         ...utf8.encode('--$boundary\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n$metadata\r\n'),
-        ...utf8.encode('--$boundary\r\nContent-Type: application/json\r\n\r\n$payload\r\n'),
+        ...utf8.encode('--$boundary\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n$payload\r\n'),
         ...utf8.encode('--$boundary--\r\n'),
       ];
 
@@ -258,19 +282,27 @@ class CloudHistorySyncService extends ChangeNotifier {
         },
         body: bodyBytes,
       );
-      return createRes.statusCode == 200 || createRes.statusCode == 201;
+
+      if (createRes.statusCode == 200 || createRes.statusCode == 201) {
+        debugPrint('[CloudSync] 구글 드라이브 루트에 $syncFileName 생성 완료');
+        return (success: true, isPermissionError: false);
+      }
+
+      debugPrint('[CloudSync] 구글 드라이브 신규 생성 실패: ${createRes.statusCode} ${createRes.body}');
+      final isPerm = createRes.statusCode == 401 || createRes.statusCode == 403;
+      return (success: false, isPermissionError: isPerm);
     }
   }
 
   // ------------------------------------------------------------
-  // WebDAV 구현
+  // WebDAV 구현 (루트 저장 및 읽기)
   // ------------------------------------------------------------
   Future<String?> _fetchWebDav(CloudService service, CloudAccount account) async {
     final baseUrl = account.webDavUrl?.replaceAll(RegExp(r'/+$'), '') ?? '';
     if (baseUrl.isEmpty) return null;
     final headers = await service.getStreamHeaders();
 
-    final fileUrl = '$baseUrl/$syncFolderName/$syncFileName';
+    final fileUrl = '$baseUrl/$syncFileName';
     final res = await http.get(Uri.parse(fileUrl), headers: headers);
     if (res.statusCode == 200) {
       return utf8.decode(res.bodyBytes);
@@ -278,20 +310,16 @@ class CloudHistorySyncService extends ChangeNotifier {
     return null;
   }
 
-  Future<bool> _uploadWebDav(CloudService service, CloudAccount account, String payload) async {
+  Future<({bool success, bool isPermissionError})> _uploadWebDav(
+    CloudService service,
+    CloudAccount account,
+    String payload,
+  ) async {
     final baseUrl = account.webDavUrl?.replaceAll(RegExp(r'/+$'), '') ?? '';
-    if (baseUrl.isEmpty) return false;
+    if (baseUrl.isEmpty) return (success: false, isPermissionError: false);
     final headers = await service.getStreamHeaders();
 
-    // 1. 디렉터리 생성 (MKCOL)
-    try {
-      final mkcolReq = http.Request('MKCOL', Uri.parse('$baseUrl/$syncFolderName'));
-      mkcolReq.headers.addAll(headers);
-      await mkcolReq.send();
-    } catch (_) {}
-
-    // 2. 파일 PUT
-    final fileUrl = '$baseUrl/$syncFolderName/$syncFileName';
+    final fileUrl = '$baseUrl/$syncFileName';
     final putRes = await http.put(
       Uri.parse(fileUrl),
       headers: {
@@ -300,15 +328,16 @@ class CloudHistorySyncService extends ChangeNotifier {
       },
       body: utf8.encode(payload),
     );
-    return putRes.statusCode == 200 || putRes.statusCode == 201 || putRes.statusCode == 204;
+    final ok = putRes.statusCode == 200 || putRes.statusCode == 201 || putRes.statusCode == 204;
+    return (success: ok, isPermissionError: putRes.statusCode == 401 || putRes.statusCode == 403);
   }
 
   // ------------------------------------------------------------
-  // OneDrive 구현
+  // OneDrive 구현 (루트 저장 및 읽기)
   // ------------------------------------------------------------
   Future<String?> _fetchOneDrive(CloudService service, CloudAccount account) async {
     final headers = await service.getStreamHeaders();
-    final url = 'https://graph.microsoft.com/v1.0/me/drive/root:/$syncFolderName/$syncFileName:/content';
+    final url = 'https://graph.microsoft.com/v1.0/me/drive/root:/$syncFileName:/content';
     final res = await http.get(Uri.parse(url), headers: headers);
     if (res.statusCode == 200) {
       return utf8.decode(res.bodyBytes);
@@ -316,9 +345,13 @@ class CloudHistorySyncService extends ChangeNotifier {
     return null;
   }
 
-  Future<bool> _uploadOneDrive(CloudService service, CloudAccount account, String payload) async {
+  Future<({bool success, bool isPermissionError})> _uploadOneDrive(
+    CloudService service,
+    CloudAccount account,
+    String payload,
+  ) async {
     final headers = await service.getStreamHeaders();
-    final url = 'https://graph.microsoft.com/v1.0/me/drive/root:/$syncFolderName/$syncFileName:/content';
+    final url = 'https://graph.microsoft.com/v1.0/me/drive/root:/$syncFileName:/content';
     final res = await http.put(
       Uri.parse(url),
       headers: {
@@ -327,11 +360,12 @@ class CloudHistorySyncService extends ChangeNotifier {
       },
       body: utf8.encode(payload),
     );
-    return res.statusCode == 200 || res.statusCode == 201;
+    final ok = res.statusCode == 200 || res.statusCode == 201;
+    return (success: ok, isPermissionError: res.statusCode == 401 || res.statusCode == 403);
   }
 
   // ------------------------------------------------------------
-  // Dropbox 구현
+  // Dropbox 구현 (루트 저장 및 읽기)
   // ------------------------------------------------------------
   Future<String?> _fetchDropbox(CloudService service, CloudAccount account) async {
     final headers = await service.getStreamHeaders();
@@ -340,7 +374,7 @@ class CloudHistorySyncService extends ChangeNotifier {
       Uri.parse(url),
       headers: {
         ...headers,
-        'Dropbox-API-Arg': jsonEncode({'path': '/$syncFolderName/$syncFileName'}),
+        'Dropbox-API-Arg': jsonEncode({'path': '/$syncFileName'}),
       },
     );
     if (res.statusCode == 200) {
@@ -349,7 +383,11 @@ class CloudHistorySyncService extends ChangeNotifier {
     return null;
   }
 
-  Future<bool> _uploadDropbox(CloudService service, CloudAccount account, String payload) async {
+  Future<({bool success, bool isPermissionError})> _uploadDropbox(
+    CloudService service,
+    CloudAccount account,
+    String payload,
+  ) async {
     final headers = await service.getStreamHeaders();
     final url = 'https://content.dropboxapi.com/2/files/upload';
     final res = await http.post(
@@ -357,7 +395,7 @@ class CloudHistorySyncService extends ChangeNotifier {
       headers: {
         ...headers,
         'Dropbox-API-Arg': jsonEncode({
-          'path': '/$syncFolderName/$syncFileName',
+          'path': '/$syncFileName',
           'mode': 'overwrite',
           'autorename': false,
           'mute': false,
@@ -366,6 +404,6 @@ class CloudHistorySyncService extends ChangeNotifier {
       },
       body: utf8.encode(payload),
     );
-    return res.statusCode == 200;
+    return (success: res.statusCode == 200, isPermissionError: res.statusCode == 401 || res.statusCode == 403);
   }
 }

@@ -8,6 +8,8 @@ import 'package:file_picker/file_picker.dart';
 import '../../models/cloud_account.dart';
 import '../../models/folder_shortcut.dart';
 import '../../models/media_item.dart';
+import '../../services/account_manager.dart';
+import '../../services/cloud_history_sync_service.dart';
 import '../../services/cloud_service_interface.dart';
 import '../../services/folder_shortcut_manager.dart';
 import '../../services/local_disk_service.dart';
@@ -229,7 +231,12 @@ class _BrowserScreenState extends State<BrowserScreen> {
           folderSiblings: _allItems,
         ),
       ),
-    );
+    ).then((_) {
+      if (mounted) {
+        final accountMgr = context.read<AccountManager>();
+        CloudHistorySyncService.instance.syncHistories(accountMgr, silent: true);
+      }
+    });
   }
 
   @override

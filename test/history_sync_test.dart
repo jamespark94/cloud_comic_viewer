@@ -17,9 +17,6 @@ void main() {
       final service = ReadingHistoryService.instance;
       await service.clearAll();
 
-      final localTime = DateTime(2026, 10, 10, 10, 0);
-      final remoteTime = DateTime(2026, 10, 10, 12, 0);
-
       // 로컬: 10페이지까지 읽음
       await service.updateProgress(
         id: 'comic_1',
