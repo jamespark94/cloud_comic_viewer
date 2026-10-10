@@ -57,6 +57,12 @@ class ViewerSettingsService extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setDisplayMode(PageDisplayMode mode) async {
+    _settings = _settings.copyWith(displayMode: mode);
+    await _persist();
+    notifyListeners();
+  }
+
   Future<void> toggleKeepScreenOn() async {
     _settings = _settings.copyWith(keepScreenOn: !_settings.keepScreenOn);
     await _persist();

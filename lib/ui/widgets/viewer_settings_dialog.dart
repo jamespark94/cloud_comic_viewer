@@ -96,7 +96,45 @@ class ViewerSettingsDialog extends StatelessWidget {
                 ),
               ),
 
-              // 2. 읽는 방향 (페이지 모드일 때만 활성화)
+              // 2. 화면 분할 / 합침 모드 (페이지 모드일 때 활성화)
+              if (settings.viewerMode == ViewerMode.singlePage) ...[
+                const SizedBox(height: 16),
+                const Text('화면 분할 / 합쳐보기', style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                SegmentedButton<PageDisplayMode>(
+                  segments: const [
+                    ButtonSegment(
+                      value: PageDisplayMode.auto,
+                      label: Text('자동'),
+                      icon: Icon(Icons.auto_awesome, size: 16),
+                    ),
+                    ButtonSegment(
+                      value: PageDisplayMode.split,
+                      label: Text('나눠보기'),
+                      icon: Icon(Icons.vertical_split, size: 16),
+                    ),
+                    ButtonSegment(
+                      value: PageDisplayMode.spread,
+                      label: Text('합쳐보기'),
+                      icon: Icon(Icons.menu_book, size: 16),
+                    ),
+                    ButtonSegment(
+                      value: PageDisplayMode.single,
+                      label: Text('1페이지'),
+                      icon: Icon(Icons.crop_portrait, size: 16),
+                    ),
+                  ],
+                  selected: {settings.displayMode},
+                  onSelectionChanged: (selected) {
+                    settingsService.setDisplayMode(selected.first);
+                  },
+                  style: const ButtonStyle(
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+              ],
+
+              // 3. 읽는 방향 (페이지 모드일 때만 활성화)
               if (settings.viewerMode == ViewerMode.singlePage) ...[
                 const SizedBox(height: 16),
                 const Text('페이지 넘김 방향', style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold)),

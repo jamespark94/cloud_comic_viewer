@@ -14,6 +14,18 @@ enum ViewerMode {
   webtoon,    // 웹툰 연속 스크롤
 }
 
+/// 화면 분할 / 합침 모드
+enum PageDisplayMode {
+  auto('자동 (비율/방향 맞춤)', Icons.auto_awesome),
+  single('1페이지 원본 보기', Icons.crop_portrait),
+  split('좌우 나눠보기', Icons.vertical_split),
+  spread('두 장 합쳐보기', Icons.menu_book);
+
+  final String label;
+  final IconData icon;
+  const PageDisplayMode(this.label, this.icon);
+}
+
 /// 이미지 맞춤 비율
 enum FitMode {
   contain,  // 화면 전체에 비율 유지 맞춤 (여백 있음)
@@ -36,6 +48,7 @@ enum ViewerTheme {
 class ViewerSettings {
   final ReadingDirection readingDirection;
   final ViewerMode viewerMode;
+  final PageDisplayMode displayMode;
   final FitMode fitMode;
   final ViewerTheme theme;
   final bool keepScreenOn;
@@ -45,6 +58,7 @@ class ViewerSettings {
   const ViewerSettings({
     this.readingDirection = ReadingDirection.leftToRight,
     this.viewerMode = ViewerMode.singlePage,
+    this.displayMode = PageDisplayMode.auto,
     this.fitMode = FitMode.contain,
     this.theme = ViewerTheme.black,
     this.keepScreenOn = true,
@@ -55,6 +69,7 @@ class ViewerSettings {
   ViewerSettings copyWith({
     ReadingDirection? readingDirection,
     ViewerMode? viewerMode,
+    PageDisplayMode? displayMode,
     FitMode? fitMode,
     ViewerTheme? theme,
     bool? keepScreenOn,
@@ -64,6 +79,7 @@ class ViewerSettings {
     return ViewerSettings(
       readingDirection: readingDirection ?? this.readingDirection,
       viewerMode: viewerMode ?? this.viewerMode,
+      displayMode: displayMode ?? this.displayMode,
       fitMode: fitMode ?? this.fitMode,
       theme: theme ?? this.theme,
       keepScreenOn: keepScreenOn ?? this.keepScreenOn,
@@ -75,6 +91,7 @@ class ViewerSettings {
   Map<String, dynamic> toJson() => {
         'readingDirection': readingDirection.name,
         'viewerMode': viewerMode.name,
+        'displayMode': displayMode.name,
         'fitMode': fitMode.name,
         'theme': theme.name,
         'keepScreenOn': keepScreenOn,
@@ -90,6 +107,10 @@ class ViewerSettings {
         viewerMode: ViewerMode.values.firstWhere(
           (e) => e.name == json['viewerMode'],
           orElse: () => ViewerMode.singlePage,
+        ),
+        displayMode: PageDisplayMode.values.firstWhere(
+          (e) => e.name == json['displayMode'],
+          orElse: () => PageDisplayMode.auto,
         ),
         fitMode: FitMode.values.firstWhere(
           (e) => e.name == json['fitMode'],
