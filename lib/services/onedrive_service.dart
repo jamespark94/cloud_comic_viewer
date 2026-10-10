@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../models/media_item.dart';
 import 'cloud_service_interface.dart';
@@ -145,4 +146,105 @@ class OneDriveService extends CloudService {
     } catch (_) {}
     return null;
   }
+
+  @override
+  Future<bool> renameItem(MediaItem item, String newName) async {
+    try {
+      await refreshTokensIfNeeded();
+      final url = 'https://graph.microsoft.com/v1.0/me/drive/items/${item.id}';
+      final headers = Map<String, String>.from(await getStreamHeaders())..['Content-Type'] = 'application/json';
+      final res = await http.patch(Uri.parse(url), headers: headers, body: jsonEncode({'name': newName}));
+      return res.statusCode == 200;
+    } catch (e) {
+      debugPrint('[OneDriveService] 이름 변경 실패: $e');
+    }
+    return false;
+  }
+
+  @override
+  Future<bool> deleteItem(MediaItem item) async {
+    try {
+      await refreshTokensIfNeeded();
+      final url = 'https://graph.microsoft.com/v1.0/me/drive/items/${item.id}';
+      final res = await http.delete(Uri.parse(url), headers: await getStreamHeaders());
+      return res.statusCode == 204 || res.statusCode == 200;
+    } catch (e) {
+      debugPrint('[OneDriveService] 삭제 실패: $e');
+    }
+    return false;
+  }
+
+  @override
+  Future<bool> moveItem(
+    MediaItem item,
+    String targetFolderId, {
+    String? newName,
+    bool overwrite = false,
+  }) async {
+    try {
+      await refreshTokensIfNeeded();
+      final url = 'https://graph.microsoft.com/v1.0/me/drive/items/${item.id}';
+      final headers = Map<String, String>.from(await getStreamHeaders())..['Content-Type'] = 'application/json';
+      final parentId = (targetFolderId.isEmpty || targetFolderId == 'root') ? 'root' : targetFolderId;
+      final bodyMap = <String, dynamic>{
+        'parentReference': {'id': parentId},
+      };
+      if (newName != null && newName.isNotEmpty && newName != item.name) {
+        bodyMap['name'] = newName;
+      }
+      final res = await http.patch(Uri.parse(url), headers: headers, body: jsonEncode(bodyMap));
+      return res.statusCode == 200;
+    } catch (e) {
+      debugPrint('[OneDriveService] 이동 실패: $e');
+    }
+    return false;
+  }
+
+  @override
+  Future<bool> copyItem(
+    MediaItem item,
+    String targetFolderId, {
+    String? newName,
+    bool overwrite = false,
+  }) async {
+    try {
+      await refreshTokensIfNeeded();
+      final url = 'https://graph.microsoft.com/v1.0/me/drive/items/${item.id}/copy';
+      final headers = Map<String, String>.from(await getStreamHeaders())..['Content-Type'] = 'application/json';
+      final parentId = (targetFolderId.isEmpty || targetFolderId == 'root') ? 'root' : targetFolderId;
+      final bodyMap = <String, dynamic>{
+        'parentReference': {'id': parentId},
+      };
+      if (newName != null && newName.isNotEmpty) {
+        bodyMap['name'] = newName;
+      }
+      final res = await http.post(Uri.parse(url), headers: headers, body: jsonEncode(bodyMap));
+      // OneDrive copy is asynchronous and returns 202 Accepted
+      return res.statusCode == 202 || res.statusCode == 200;
+    } catch (e) {
+      debugPrint('[OneDriveService] 복사 실패: $e');
+    }
+    return false;
+  }
+
+  @override
+  Future<bool> createFolder(String folderName, {String? parentFolderId}) async {
+    try {
+      await refreshTokensIfNeeded();
+      final parentId = (parentFolderId == null || parentFolderId.isEmpty || parentFolderId == 'root') ? 'root' : parentFolderId;
+      final url = 'https://graph.microsoft.com/v1.0/me/drive/items/$parentId/children';
+      final headers = Map<String, String>.from(await getStreamHeaders())..['Content-Type'] = 'application/json';
+      final body = jsonEncode({
+        'name': folderName,
+        'folder': {},
+        '@microsoft.graph.conflictBehavior': 'rename',
+      });
+      final res = await http.post(Uri.parse(url), headers: headers, body: body);
+      return res.statusCode == 201 || res.statusCode == 200;
+    } catch (e) {
+      debugPrint('[OneDriveService] 새 폴더 생성 실패: $e');
+    }
+    return false;
+  }
 }
+

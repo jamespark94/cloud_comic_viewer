@@ -13,6 +13,7 @@ import '../../services/cloud_history_sync_service.dart';
 import '../../services/cloud_service_interface.dart';
 import '../../services/folder_shortcut_manager.dart';
 import '../../services/local_disk_service.dart';
+import '../../services/reading_history_service.dart';
 import '../../utils/permission_utils.dart';
 import 'comic_viewer_screen.dart';
 
@@ -25,6 +26,18 @@ enum BrowserViewMode {
   final String label;
   final IconData icon;
   const BrowserViewMode(this.label, this.icon);
+}
+
+enum ConflictResolution {
+  rename,
+  overwrite,
+  cancel,
+}
+
+class ConflictResolutionResult {
+  final ConflictResolution resolution;
+  final String? newName;
+  const ConflictResolutionResult(this.resolution, [this.newName]);
 }
 
 class BrowserScreen extends StatefulWidget {
@@ -50,6 +63,10 @@ class _BrowserScreenState extends State<BrowserScreen> {
   String? _errorMessage;
   List<MediaItem> _allItems = [];
   List<MediaItem> _filteredItems = [];
+
+  MediaItem? _clipboardItem;
+  bool _isCutMode = false;
+  String? _clipboardSourceFolderId;
 
   late final List<MapEntry<String?, String>> _folderStack;
   String _searchQuery = '';
@@ -239,6 +256,692 @@ class _BrowserScreenState extends State<BrowserScreen> {
     });
   }
 
+  Future<void> _toggleFolderShortcut(
+    MediaItem item,
+    FolderShortcutManager shortcutMgr,
+    bool isBookmarked,
+  ) async {
+    if (isBookmarked) {
+      await shortcutMgr.removeShortcutByFolder(widget.account.id, item.id);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('\'${item.name}\' 바로가기가 해제되었습니다.')),
+        );
+      }
+    } else {
+      final shortcut = FolderShortcut(
+        id: '${widget.account.id}_${item.id}',
+        accountId: widget.account.id,
+        accountName: widget.account.name,
+        cloudType: widget.account.type,
+        folderId: item.id,
+        folderName: item.name,
+        folderPath: _currentFolderPath,
+        createdAt: DateTime.now(),
+      );
+      await shortcutMgr.addShortcut(shortcut);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('\'${item.name}\' 홈 바로가기에 추가되었습니다.')),
+        );
+      }
+    }
+  }
+
+  Future<void> _promptNewFolder() async {
+    final textController = TextEditingController();
+    final folderName = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E2433),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: Row(
+          children: const [
+            Icon(Icons.create_new_folder, color: Colors.blueAccent, size: 24),
+            SizedBox(width: 8),
+            Text('새 폴더 생성', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: TextField(
+          controller: textController,
+          autofocus: true,
+          style: const TextStyle(fontSize: 14),
+          decoration: InputDecoration(
+            labelText: '폴더 이름',
+            hintText: '새 폴더명을 입력하세요',
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+          onSubmitted: (val) {
+            final trimmed = val.trim();
+            if (trimmed.isNotEmpty) {
+              Navigator.pop(ctx, trimmed);
+            }
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, null),
+            child: const Text('취소', style: TextStyle(color: Colors.white60)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
+            onPressed: () {
+              final val = textController.text.trim();
+              if (val.isNotEmpty) {
+                Navigator.pop(ctx, val);
+              } else {
+                Navigator.pop(ctx, null);
+              }
+            },
+            child: const Text('생성', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (folderName != null && folderName.isNotEmpty) {
+      setState(() => _isLoading = true);
+      final parentId = _folderStack.last.key;
+      final ok = await widget.service.createFolder(folderName, parentFolderId: parentId);
+      if (mounted) {
+        if (ok) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('\'$folderName\' 폴더가 생성되었습니다.')),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('새 폴더 생성에 실패했습니다.')),
+          );
+        }
+        _loadFolder();
+      }
+    }
+  }
+
+  Future<void> _promptRename(MediaItem item) async {
+    final textController = TextEditingController(text: item.name);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E2433),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: Row(
+          children: [
+            Icon(item.isFolder ? Icons.folder : Icons.edit, color: Colors.amber, size: 22),
+            const SizedBox(width: 8),
+            const Text('이름 변경', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: TextField(
+          controller: textController,
+          autofocus: true,
+          style: const TextStyle(fontSize: 14),
+          decoration: InputDecoration(
+            labelText: '새 이름',
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+          onSubmitted: (val) {
+            final trimmed = val.trim();
+            if (trimmed.isNotEmpty && trimmed != item.name) {
+              Navigator.pop(ctx, trimmed);
+            }
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, null),
+            child: const Text('취소', style: TextStyle(color: Colors.white60)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
+            onPressed: () {
+              final val = textController.text.trim();
+              if (val.isNotEmpty && val != item.name) {
+                Navigator.pop(ctx, val);
+              } else {
+                Navigator.pop(ctx, null);
+              }
+            },
+            child: const Text('변경', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (newName != null && newName.isNotEmpty && newName != item.name) {
+      setState(() => _isLoading = true);
+      final ok = await widget.service.renameItem(item, newName);
+      if (mounted) {
+        if (ok) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('\'$newName\'(으)로 이름이 변경되었습니다.')),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('이름 변경에 실패했습니다.')),
+          );
+        }
+        _loadFolder();
+      }
+    }
+  }
+
+  Future<void> _confirmDelete(MediaItem item) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E2433),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: Row(
+          children: const [
+            Icon(Icons.delete_forever, color: Colors.redAccent, size: 24),
+            SizedBox(width: 8),
+            Text('삭제 확인', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Text(
+          '\'${item.name}\'${item.isFolder ? ' 폴더와 내부 모든 파일' : ''}을(를) 정말 삭제하시겠습니까?\n\n이 작업은 되돌릴 수 없습니다.',
+          style: const TextStyle(fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소', style: TextStyle(color: Colors.white60)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('삭제', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      setState(() => _isLoading = true);
+      final ok = await widget.service.deleteItem(item);
+      if (mounted) {
+        if (ok) {
+          if (item.isViewable) {
+            await ReadingHistoryService.instance.removeHistory(item.id);
+            if (mounted) {
+              final accountMgr = context.read<AccountManager>();
+              CloudHistorySyncService.instance.syncHistories(accountMgr, silent: true);
+            }
+          } else if (item.isFolder && mounted) {
+            final shortcutMgr = context.read<FolderShortcutManager>();
+            if (shortcutMgr.isFolderShortcut(widget.account.id, item.id)) {
+              await shortcutMgr.removeShortcutByFolder(widget.account.id, item.id);
+            }
+          }
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('\'${item.name}\'이(가) 삭제되었습니다.')),
+          );
+        } else {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('삭제에 실패했습니다.')),
+          );
+        }
+        _loadFolder();
+      }
+    }
+  }
+
+  String _generateCopyName({
+    required String originalName,
+    required bool isFolder,
+    required Iterable<String> existingNames,
+    bool isSameFolder = true,
+  }) {
+    String baseName;
+    String extension;
+
+    if (!isFolder && originalName.contains('.') && originalName.lastIndexOf('.') > 0) {
+      final dotIndex = originalName.lastIndexOf('.');
+      baseName = originalName.substring(0, dotIndex);
+      extension = originalName.substring(dotIndex);
+    } else {
+      baseName = originalName;
+      extension = '';
+    }
+
+    if (isSameFolder) {
+      String candidate = '$baseName - 복사본$extension';
+      if (!existingNames.any((n) => n.toLowerCase() == candidate.toLowerCase())) {
+        return candidate;
+      }
+      int count = 2;
+      while (true) {
+        candidate = '$baseName - 복사본 ($count)$extension';
+        if (!existingNames.any((n) => n.toLowerCase() == candidate.toLowerCase())) {
+          return candidate;
+        }
+        count++;
+      }
+    } else {
+      int count = 1;
+      while (true) {
+        final candidate = '$baseName ($count)$extension';
+        if (!existingNames.any((n) => n.toLowerCase() == candidate.toLowerCase())) {
+          return candidate;
+        }
+        count++;
+      }
+    }
+  }
+
+  Future<ConflictResolutionResult?> _showConflictDialog({
+    required MediaItem item,
+    required bool isCutMode,
+    required String suggestedName,
+  }) async {
+    final nameController = TextEditingController(text: suggestedName);
+    return showDialog<ConflictResolutionResult>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E2433),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: Row(
+          children: const [
+            Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 24),
+            SizedBox(width: 8),
+            Text('이름 중복 확인', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '대상 폴더에 이미 동일한 이름의 \'${item.name}\' ${item.isFolder ? '폴더' : '파일'}이(가) 존재합니다.',
+              style: const TextStyle(fontSize: 13, height: 1.4),
+            ),
+            const SizedBox(height: 14),
+            const Text(
+              '새 이름으로 변경하여 둘 다 유지:',
+              style: TextStyle(fontSize: 12, color: Colors.white70),
+            ),
+            const SizedBox(height: 6),
+            TextField(
+              controller: nameController,
+              autofocus: false,
+              style: const TextStyle(fontSize: 13),
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, const ConflictResolutionResult(ConflictResolution.cancel)),
+            child: const Text('취소', style: TextStyle(color: Colors.white60)),
+          ),
+          OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.redAccent,
+              side: const BorderSide(color: Colors.redAccent),
+            ),
+            onPressed: () => Navigator.pop(ctx, const ConflictResolutionResult(ConflictResolution.overwrite)),
+            child: const Text('덮어쓰기'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
+            onPressed: () {
+              final customName = nameController.text.trim();
+              Navigator.pop(
+                ctx,
+                ConflictResolutionResult(
+                  ConflictResolution.rename,
+                  customName.isNotEmpty ? customName : suggestedName,
+                ),
+              );
+            },
+            child: Text(
+              isCutMode ? '이름 변경 후 이동' : '이름 변경 후 복사',
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _executePasteOrMove() async {
+    if (_clipboardItem == null) return;
+    final item = _clipboardItem!;
+    final targetFolderId = _folderStack.last.key;
+
+    if (widget.account.type == CloudType.local && _folderStack.length <= 1) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('드라이브 또는 대상 폴더 내부로 먼저 이동한 후 붙여넣어 주세요.')),
+      );
+      return;
+    }
+
+    if (item.id == targetFolderId) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('동일한 폴더로 이동하거나 복사할 수 없습니다.')),
+      );
+      return;
+    }
+
+    if (item.isFolder && targetFolderId != null && targetFolderId.startsWith(item.id)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('상위 폴더를 하위 폴더로 이동하거나 복사할 수 없습니다.')),
+      );
+      return;
+    }
+
+    final isSameFolder = _clipboardSourceFolderId == targetFolderId;
+
+    if (_isCutMode && isSameFolder) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('이미 동일한 폴더에 위치해 있습니다.')),
+      );
+      return;
+    }
+
+    final existingNames = _allItems.map((e) => e.name).toList();
+    final hasNameConflict = existingNames.any((n) => n.toLowerCase() == item.name.toLowerCase());
+
+    String? finalName;
+    bool overwrite = false;
+
+    if (!_isCutMode && isSameFolder) {
+      // 1. 동일한 폴더 내 복사: 자동으로 "파일명 - 복사본" 부여
+      finalName = _generateCopyName(
+        originalName: item.name,
+        isFolder: item.isFolder,
+        existingNames: existingNames,
+        isSameFolder: true,
+      );
+    } else if (hasNameConflict) {
+      // 2. 다른 폴더에 동일 이름이 이미 존재하는 경우: 충돌 해결 다이얼로그
+      final suggestedName = _generateCopyName(
+        originalName: item.name,
+        isFolder: item.isFolder,
+        existingNames: existingNames,
+        isSameFolder: false,
+      );
+      final result = await _showConflictDialog(
+        item: item,
+        isCutMode: _isCutMode,
+        suggestedName: suggestedName,
+      );
+
+      if (result == null || result.resolution == ConflictResolution.cancel) {
+        return;
+      }
+
+      if (result.resolution == ConflictResolution.overwrite) {
+        overwrite = true;
+        finalName = item.name;
+      } else if (result.resolution == ConflictResolution.rename) {
+        finalName = result.newName ?? suggestedName;
+      }
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    bool success = false;
+    try {
+      if (_isCutMode) {
+        success = await widget.service.moveItem(
+          item,
+          targetFolderId ?? '',
+          newName: finalName,
+          overwrite: overwrite,
+        );
+      } else {
+        success = await widget.service.copyItem(
+          item,
+          targetFolderId ?? '',
+          newName: finalName,
+          overwrite: overwrite,
+        );
+      }
+    } catch (e) {
+      debugPrint('[BrowserScreen] 붙여넣기/이동 오류: $e');
+    }
+
+    if (mounted) {
+      final opText = _isCutMode ? '이동' : '복사';
+      if (success) {
+        final displayName = finalName ?? item.name;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('\'$displayName\' $opText이(가) 완료되었습니다.')),
+        );
+        setState(() {
+          _clipboardItem = null;
+          _clipboardSourceFolderId = null;
+        });
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$opText에 실패했습니다.')),
+        );
+      }
+      _loadFolder();
+    }
+  }
+
+  void _showItemOperationsMenu(BuildContext context, MediaItem item) {
+    final shortcutMgr = context.read<FolderShortcutManager>();
+    final isBookmarked = item.isFolder && shortcutMgr.isFolderShortcut(widget.account.id, item.id);
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF191E2A),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetCtx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 36,
+              height: 4,
+              margin: const EdgeInsets.symmetric(vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.white24,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              child: Row(
+                children: [
+                  Icon(
+                    item.isFolder
+                        ? Icons.folder
+                        : (item.isComicArchive
+                            ? Icons.auto_stories
+                            : (item.isImage ? Icons.image : Icons.insert_drive_file)),
+                    color: item.isFolder
+                        ? Colors.amber
+                        : (item.isComicArchive ? Colors.blueAccent : Colors.tealAccent),
+                    size: 24,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      item.name,
+                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(color: Colors.white12, height: 12),
+            if (item.isViewable)
+              ListTile(
+                dense: true,
+                leading: const Icon(Icons.menu_book_rounded, color: Colors.blueAccent),
+                title: const Text('만화 열기'),
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  _openComicViewer(item);
+                },
+              ),
+            if (item.isFolder)
+              ListTile(
+                dense: true,
+                leading: Icon(
+                  isBookmarked ? Icons.bookmark_remove : Icons.bookmark_add_outlined,
+                  color: Colors.amber,
+                ),
+                title: Text(isBookmarked ? '첫 화면 바로가기 해제' : '첫 화면 바로가기에 추가'),
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  _toggleFolderShortcut(item, shortcutMgr, isBookmarked);
+                },
+              ),
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.copy_outlined, color: Colors.lightBlueAccent),
+              title: const Text('복사'),
+              onTap: () {
+                Navigator.pop(sheetCtx);
+                setState(() {
+                  _clipboardItem = item;
+                  _isCutMode = false;
+                  _clipboardSourceFolderId = _folderStack.last.key;
+                });
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('\'${item.name}\' 복사 대기 중입니다. 대상 폴더에서 [붙여넣기]를 누르세요.'),
+                    duration: const Duration(seconds: 3),
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.drive_file_move_outlined, color: Colors.orangeAccent),
+              title: const Text('잘라내기 (이동)'),
+              onTap: () {
+                Navigator.pop(sheetCtx);
+                setState(() {
+                  _clipboardItem = item;
+                  _isCutMode = true;
+                  _clipboardSourceFolderId = _folderStack.last.key;
+                });
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('\'${item.name}\' 이동 대기 중입니다. 대상 폴더에서 [여기로 이동]을 누르세요.'),
+                    duration: const Duration(seconds: 3),
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.drive_file_rename_outline, color: Colors.tealAccent),
+              title: const Text('이름 변경'),
+              onTap: () {
+                Navigator.pop(sheetCtx);
+                _promptRename(item);
+              },
+            ),
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
+              title: const Text('삭제', style: TextStyle(color: Colors.redAccent)),
+              onTap: () {
+                Navigator.pop(sheetCtx);
+                _confirmDelete(item);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildClipboardBar() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E2433),
+        border: const Border(top: BorderSide(color: Colors.white24, width: 0.8)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withAlpha(120),
+            blurRadius: 10,
+            offset: const Offset(0, -3),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: Row(
+          children: [
+            Icon(
+              _isCutMode ? Icons.drive_file_move : Icons.copy_all,
+              color: Colors.amber,
+              size: 24,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _isCutMode ? '이동 대기 중' : '복사 대기 중',
+                    style: const TextStyle(fontSize: 11, color: Colors.amber, fontWeight: FontWeight.bold),
+                  ),
+                  Text(
+                    _clipboardItem?.name ?? '',
+                    style: const TextStyle(fontSize: 13, color: Colors.white, fontWeight: FontWeight.w600),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blueAccent,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              ),
+              icon: Icon(_isCutMode ? Icons.drive_file_move_outlined : Icons.content_paste, size: 16),
+              label: Text(
+                _isCutMode ? '여기로 이동' : '여기에 붙여넣기',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+              ),
+              onPressed: _executePasteOrMove,
+            ),
+            const SizedBox(width: 4),
+            IconButton(
+              icon: const Icon(Icons.close, color: Colors.white60, size: 20),
+              tooltip: '취소',
+              onPressed: () {
+                setState(() {
+                  _clipboardItem = null;
+                  _clipboardSourceFolderId = null;
+                });
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final currentFolderName = _folderStack.last.value;
@@ -349,6 +1052,13 @@ class _BrowserScreenState extends State<BrowserScreen> {
                   );
                 },
               ),
+            // 새 폴더 생성 버튼 (로컬 최상단 저장소 목록일 때는 제외)
+            if (!(widget.account.type == CloudType.local && _folderStack.length <= 1))
+              IconButton(
+                icon: const Icon(Icons.create_new_folder_outlined),
+                tooltip: '새 폴더 생성',
+                onPressed: _promptNewFolder,
+              ),
             IconButton(
               icon: const Icon(Icons.refresh),
               tooltip: '새로고침',
@@ -367,8 +1077,10 @@ class _BrowserScreenState extends State<BrowserScreen> {
           ),
         ),
         body: _buildBody(),
+        bottomNavigationBar: _clipboardItem != null ? _buildClipboardBar() : null,
       ),
     );
+
   }
 
   Widget _buildBreadcrumbBar() {
@@ -556,30 +1268,71 @@ class _BrowserScreenState extends State<BrowserScreen> {
         final item = _filteredItems[index];
 
         if (item.isFolder) {
+          final isShortcut = item.id != '__ACTION_ADD_STORAGE__' &&
+              context.watch<FolderShortcutManager>().isFolderShortcut(widget.account.id, item.id);
           return InkWell(
             onTap: () => _navigateToFolder(item),
+            onLongPress: item.id == '__ACTION_ADD_STORAGE__' ? null : () => _showItemOperationsMenu(context, item),
             borderRadius: BorderRadius.circular(12),
             child: Container(
-              padding: const EdgeInsets.all(10),
+              padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
                 color: const Color(0xFF1B202B),
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: Colors.amber.withAlpha(40)),
               ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
+              child: Stack(
                 children: [
-                  const Icon(Icons.folder, size: 54, color: Colors.amber),
-                  const SizedBox(height: 10),
-                  Text(
-                    item.name,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold),
+                  Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.folder, size: 52, color: Colors.amber),
+                        const SizedBox(height: 8),
+                        Text(
+                          item.name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 4),
+                        const Text('폴더', style: TextStyle(color: Colors.white38, fontSize: 10.5)),
+                      ],
+                    ),
                   ),
-                  const SizedBox(height: 4),
-                  const Text('폴더', style: TextStyle(color: Colors.white38, fontSize: 10.5)),
+                  if (item.id != '__ACTION_ADD_STORAGE__')
+                    Positioned(
+                      top: 0,
+                      right: 0,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Consumer<FolderShortcutManager>(
+                            builder: (context, shortcutMgr, _) => InkWell(
+                              onTap: () => _toggleFolderShortcut(item, shortcutMgr, isShortcut),
+                              borderRadius: BorderRadius.circular(12),
+                              child: Padding(
+                                padding: const EdgeInsets.all(4),
+                                child: Icon(
+                                  isShortcut ? Icons.bookmark : Icons.bookmark_add_outlined,
+                                  size: 16,
+                                  color: isShortcut ? Colors.amber : Colors.white38,
+                                ),
+                              ),
+                            ),
+                          ),
+                          InkWell(
+                            onTap: () => _showItemOperationsMenu(context, item),
+                            borderRadius: BorderRadius.circular(12),
+                            child: const Padding(
+                              padding: EdgeInsets.all(4),
+                              child: Icon(Icons.more_vert, size: 16, color: Colors.white54),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -591,44 +1344,63 @@ class _BrowserScreenState extends State<BrowserScreen> {
 
         return InkWell(
           onTap: () => _openComicViewer(item),
+          onLongPress: () => _showItemOperationsMenu(context, item),
           borderRadius: BorderRadius.circular(12),
           child: Container(
-            padding: const EdgeInsets.all(10),
+            padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
               color: const Color(0xFF1B202B),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: Colors.white10),
             ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
+            child: Stack(
               children: [
-                Container(
-                  width: 58,
-                  height: 58,
-                  decoration: BoxDecoration(
-                    color: iconColor.withAlpha(25),
+                Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 54,
+                        height: 54,
+                        decoration: BoxDecoration(
+                          color: iconColor.withAlpha(25),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(
+                          isArchive ? Icons.auto_stories : Icons.image,
+                          size: 32,
+                          color: iconColor,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        item.name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, height: 1.25),
+                      ),
+                      const SizedBox(height: 4),
+                      if (item.formattedSize.isNotEmpty)
+                        Text(
+                          item.formattedSize,
+                          style: const TextStyle(color: Colors.white38, fontSize: 10.5),
+                        ),
+                    ],
+                  ),
+                ),
+                Positioned(
+                  top: 0,
+                  right: 0,
+                  child: InkWell(
+                    onTap: () => _showItemOperationsMenu(context, item),
                     borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(
-                    isArchive ? Icons.auto_stories : Icons.image,
-                    size: 34,
-                    color: iconColor,
+                    child: const Padding(
+                      padding: EdgeInsets.all(4),
+                      child: Icon(Icons.more_vert, size: 16, color: Colors.white54),
+                    ),
                   ),
                 ),
-                const SizedBox(height: 10),
-                Text(
-                  item.name,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, height: 1.25),
-                ),
-                const SizedBox(height: 4),
-                if (item.formattedSize.isNotEmpty)
-                  Text(
-                    item.formattedSize,
-                    style: const TextStyle(color: Colors.white38, fontSize: 10.5),
-                  ),
               ],
             ),
           ),
@@ -655,6 +1427,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
         if (item.isFolder) {
           return InkWell(
             onTap: () => _navigateToFolder(item),
+            onLongPress: item.id == '__ACTION_ADD_STORAGE__' ? null : () => _showItemOperationsMenu(context, item),
             borderRadius: BorderRadius.circular(8),
             child: Container(
               padding: const EdgeInsets.all(6),
@@ -663,18 +1436,37 @@ class _BrowserScreenState extends State<BrowserScreen> {
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: Colors.white10),
               ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
+              child: Stack(
                 children: [
-                  const Icon(Icons.folder, size: 36, color: Colors.amber),
-                  const SizedBox(height: 6),
-                  Text(
-                    item.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
+                  Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.folder, size: 34, color: Colors.amber),
+                        const SizedBox(height: 4),
+                        Text(
+                          item.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
+                        ),
+                      ],
+                    ),
                   ),
+                  if (item.id != '__ACTION_ADD_STORAGE__')
+                    Positioned(
+                      top: -4,
+                      right: -4,
+                      child: InkWell(
+                        onTap: () => _showItemOperationsMenu(context, item),
+                        borderRadius: BorderRadius.circular(10),
+                        child: const Padding(
+                          padding: EdgeInsets.all(4),
+                          child: Icon(Icons.more_vert, size: 14, color: Colors.white38),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -686,6 +1478,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
 
         return InkWell(
           onTap: () => _openComicViewer(item),
+          onLongPress: () => _showItemOperationsMenu(context, item),
           borderRadius: BorderRadius.circular(8),
           child: Container(
             padding: const EdgeInsets.all(6),
@@ -694,29 +1487,47 @@ class _BrowserScreenState extends State<BrowserScreen> {
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: Colors.white10),
             ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
+            child: Stack(
               children: [
-                Icon(
-                  isArchive ? Icons.auto_stories : Icons.image,
-                  size: 32,
-                  color: iconColor,
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  item.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w500),
-                ),
-                if (item.formattedSize.isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    item.formattedSize,
-                    style: const TextStyle(color: Colors.white38, fontSize: 9.5),
+                Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        isArchive ? Icons.auto_stories : Icons.image,
+                        size: 30,
+                        color: iconColor,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        item.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w500),
+                      ),
+                      if (item.formattedSize.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          item.formattedSize,
+                          style: const TextStyle(color: Colors.white38, fontSize: 9.5),
+                        ),
+                      ],
+                    ],
                   ),
-                ],
+                ),
+                Positioned(
+                  top: -4,
+                  right: -4,
+                  child: InkWell(
+                    onTap: () => _showItemOperationsMenu(context, item),
+                    borderRadius: BorderRadius.circular(10),
+                    child: const Padding(
+                      padding: EdgeInsets.all(4),
+                      child: Icon(Icons.more_vert, size: 14, color: Colors.white38),
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -738,8 +1549,20 @@ class _BrowserScreenState extends State<BrowserScreen> {
             visualDensity: const VisualDensity(vertical: -1),
             leading: const Icon(Icons.folder, color: Colors.amber, size: 26),
             title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13.5)),
-            trailing: const Icon(Icons.chevron_right, size: 18, color: Colors.white24),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (item.id != '__ACTION_ADD_STORAGE__')
+                  IconButton(
+                    icon: const Icon(Icons.more_vert, size: 18, color: Colors.white54),
+                    tooltip: '옵션 더보기',
+                    onPressed: () => _showItemOperationsMenu(context, item),
+                  ),
+                const Icon(Icons.chevron_right, size: 18, color: Colors.white24),
+              ],
+            ),
             onTap: () => _navigateToFolder(item),
+            onLongPress: item.id == '__ACTION_ADD_STORAGE__' ? null : () => _showItemOperationsMenu(context, item),
           );
         }
 
@@ -751,11 +1574,22 @@ class _BrowserScreenState extends State<BrowserScreen> {
           visualDensity: const VisualDensity(vertical: -1),
           leading: Icon(isArchive ? Icons.auto_stories : Icons.image, color: iconColor, size: 24),
           title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13.5)),
-          trailing: Text(
-            item.formattedSize,
-            style: const TextStyle(color: Colors.white38, fontSize: 11),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                item.formattedSize,
+                style: const TextStyle(color: Colors.white38, fontSize: 11),
+              ),
+              IconButton(
+                icon: const Icon(Icons.more_vert, size: 18, color: Colors.white54),
+                tooltip: '옵션 더보기',
+                onPressed: () => _showItemOperationsMenu(context, item),
+              ),
+            ],
           ),
           onTap: () => _openComicViewer(item),
+          onLongPress: () => _showItemOperationsMenu(context, item),
         );
       },
     );
@@ -773,8 +1607,20 @@ class _BrowserScreenState extends State<BrowserScreen> {
             leading: const Icon(Icons.folder, color: Colors.amber, size: 36),
             title: Text(item.name, style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 14)),
             subtitle: const Text('폴더', style: TextStyle(color: Colors.grey, fontSize: 12)),
-            trailing: const Icon(Icons.chevron_right, size: 20, color: Colors.white24),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (item.id != '__ACTION_ADD_STORAGE__')
+                  IconButton(
+                    icon: const Icon(Icons.more_vert, size: 20, color: Colors.white54),
+                    tooltip: '옵션 더보기',
+                    onPressed: () => _showItemOperationsMenu(context, item),
+                  ),
+                const Icon(Icons.chevron_right, size: 20, color: Colors.white24),
+              ],
+            ),
             onTap: () => _navigateToFolder(item),
+            onLongPress: item.id == '__ACTION_ADD_STORAGE__' ? null : () => _showItemOperationsMenu(context, item),
           );
         }
 
@@ -806,8 +1652,23 @@ class _BrowserScreenState extends State<BrowserScreen> {
                 ),
             ],
           ),
-          trailing: const Icon(Icons.play_circle_outline, color: Colors.blueAccent, size: 24),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.menu_book, color: Colors.blueAccent, size: 22),
+                tooltip: '만화 열기',
+                onPressed: () => _openComicViewer(item),
+              ),
+              IconButton(
+                icon: const Icon(Icons.more_vert, size: 20, color: Colors.white54),
+                tooltip: '옵션 더보기',
+                onPressed: () => _showItemOperationsMenu(context, item),
+              ),
+            ],
+          ),
           onTap: () => _openComicViewer(item),
+          onLongPress: () => _showItemOperationsMenu(context, item),
         );
       },
     );

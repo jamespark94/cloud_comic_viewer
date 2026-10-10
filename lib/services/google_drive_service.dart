@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../models/media_item.dart';
 import 'cloud_service_interface.dart';
@@ -126,4 +127,104 @@ class GoogleDriveService extends CloudService {
     } catch (_) {}
     return null;
   }
+
+  @override
+  Future<bool> renameItem(MediaItem item, String newName) async {
+    try {
+      await refreshTokensIfNeeded();
+      final url = 'https://www.googleapis.com/drive/v3/files/${item.id}';
+      final headers = Map<String, String>.from(await getStreamHeaders())..['Content-Type'] = 'application/json';
+      final res = await http.patch(Uri.parse(url), headers: headers, body: jsonEncode({'name': newName}));
+      return res.statusCode == 200;
+    } catch (e) {
+      debugPrint('[GoogleDriveService] 이름 변경 실패: $e');
+    }
+    return false;
+  }
+
+  @override
+  Future<bool> deleteItem(MediaItem item) async {
+    try {
+      await refreshTokensIfNeeded();
+      final url = 'https://www.googleapis.com/drive/v3/files/${item.id}';
+      final res = await http.delete(Uri.parse(url), headers: await getStreamHeaders());
+      return res.statusCode == 204 || res.statusCode == 200;
+    } catch (e) {
+      debugPrint('[GoogleDriveService] 삭제 실패: $e');
+    }
+    return false;
+  }
+
+  @override
+  Future<bool> moveItem(
+    MediaItem item,
+    String targetFolderId, {
+    String? newName,
+    bool overwrite = false,
+  }) async {
+    try {
+      await refreshTokensIfNeeded();
+      final oldParent = item.parentId ?? 'root';
+      final url = 'https://www.googleapis.com/drive/v3/files/${item.id}?addParents=$targetFolderId&removeParents=$oldParent';
+      final headers = Map<String, String>.from(await getStreamHeaders())..['Content-Type'] = 'application/json';
+      final bodyMap = (newName != null && newName.isNotEmpty && newName != item.name)
+          ? {'name': newName}
+          : null;
+      final res = await http.patch(
+        Uri.parse(url),
+        headers: headers,
+        body: bodyMap != null ? jsonEncode(bodyMap) : null,
+      );
+      return res.statusCode == 200;
+    } catch (e) {
+      debugPrint('[GoogleDriveService] 이동 실패: $e');
+    }
+    return false;
+  }
+
+  @override
+  Future<bool> copyItem(
+    MediaItem item,
+    String targetFolderId, {
+    String? newName,
+    bool overwrite = false,
+  }) async {
+    try {
+      await refreshTokensIfNeeded();
+      final url = 'https://www.googleapis.com/drive/v3/files/${item.id}/copy';
+      final headers = Map<String, String>.from(await getStreamHeaders())..['Content-Type'] = 'application/json';
+      final bodyMap = <String, dynamic>{
+        'parents': [targetFolderId],
+      };
+      if (newName != null && newName.isNotEmpty) {
+        bodyMap['name'] = newName;
+      }
+      final res = await http.post(Uri.parse(url), headers: headers, body: jsonEncode(bodyMap));
+      return res.statusCode == 200;
+    } catch (e) {
+      debugPrint('[GoogleDriveService] 복사 실패: $e');
+    }
+    return false;
+  }
+
+  @override
+  Future<bool> createFolder(String folderName, {String? parentFolderId}) async {
+    try {
+      await refreshTokensIfNeeded();
+      final parent = (parentFolderId != null && parentFolderId.isNotEmpty) ? parentFolderId : 'root';
+      final url = 'https://www.googleapis.com/drive/v3/files';
+      final headers = Map<String, String>.from(await getStreamHeaders())..['Content-Type'] = 'application/json';
+      final body = jsonEncode({
+        'name': folderName,
+        'mimeType': 'application/vnd.google-apps.folder',
+        'parents': [parent],
+      });
+      final res = await http.post(Uri.parse(url), headers: headers, body: body);
+      return res.statusCode == 200;
+    } catch (e) {
+      debugPrint('[GoogleDriveService] 새 폴더 생성 실패: $e');
+    }
+    return false;
+  }
 }
+
