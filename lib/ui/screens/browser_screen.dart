@@ -463,7 +463,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
       if (mounted) {
         if (ok) {
           if (item.isViewable) {
-            await ReadingHistoryService.instance.removeHistory(item.id);
+            await ReadingHistoryService.instance.removeHistory(item.id, title: item.name);
             if (mounted) {
               final accountMgr = context.read<AccountManager>();
               CloudHistorySyncService.instance.syncHistories(accountMgr, silent: true);

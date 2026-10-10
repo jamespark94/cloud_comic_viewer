@@ -35,19 +35,94 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   static const String _prefViewModeKey = 'home_explorer_view_mode';
   HomeViewMode _viewMode = HomeViewMode.largeIcons;
   final DateFormat _dateFormat = DateFormat('yy.MM.dd HH:mm');
+  DateTime? _backgroundEnteredTime;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadViewMode();
     // 앱 시작 시 백그라운드로 클라우드 히스토리 동기화 1회 자동 시도
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _silentSyncWithCloud();
     });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      _backgroundEnteredTime = DateTime.now();
+    } else if (state == AppLifecycleState.resumed) {
+      if (_backgroundEnteredTime != null) {
+        final elapsed = DateTime.now().difference(_backgroundEnteredTime!);
+        if (elapsed.inSeconds >= 30) {
+          debugPrint('[HomeScreen] 백그라운드 복귀 (${elapsed.inSeconds}초 경과): 클라우드 히스토리 자동 동기화 실행');
+          _silentSyncWithCloud();
+        }
+      }
+      _backgroundEnteredTime = null;
+    }
+  }
+
+  Future<void> _removeHistoryItem(ComicReadingHistory history) async {
+    await ReadingHistoryService.instance.removeHistory(history.id, title: history.title);
+    if (mounted) {
+      final accountMgr = context.read<AccountManager>();
+      CloudHistorySyncService.instance.syncHistories(accountMgr, silent: true);
+    }
+  }
+
+  Future<void> _clearAllHistories() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E2433),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: Row(
+          children: const [
+            Icon(Icons.delete_sweep, color: Colors.redAccent, size: 24),
+            SizedBox(width: 8),
+            Text('전체 기록 삭제', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: const Text(
+          '최근 읽은 만화 기록을 모두 삭제하시겠습니까?\n동기화된 클라우드 서버의 기록도 함께 삭제됩니다.',
+          style: TextStyle(fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소', style: TextStyle(color: Colors.white60)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('전체 삭제', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await ReadingHistoryService.instance.clearAll();
+      if (mounted) {
+        final accountMgr = context.read<AccountManager>();
+        CloudHistorySyncService.instance.syncHistories(accountMgr, silent: true);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('모든 열람 기록이 삭제되었습니다.')),
+        );
+      }
+    }
   }
 
   Future<void> _loadViewMode() async {
@@ -283,7 +358,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   TextButton.icon(
                     icon: const Icon(Icons.delete_sweep_outlined, size: 16, color: Colors.white38),
                     label: const Text('기록 비우기', style: TextStyle(color: Colors.white38, fontSize: 12)),
-                    onPressed: () => historyService.clearAll(),
+                    onPressed: _clearAllHistories,
                   ),
                 ],
               ),
@@ -299,9 +374,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     case HomeViewMode.smallIcons:
                       return _buildRecentSmallGrid(context, recentList, constraints.maxWidth);
                     case HomeViewMode.list:
-                      return _buildRecentList(context, recentList, historyService);
+                      return _buildRecentList(context, recentList);
                     case HomeViewMode.details:
-                      return _buildRecentDetailsTable(context, recentList, historyService, constraints.maxWidth);
+                      return _buildRecentDetailsTable(context, recentList, constraints.maxWidth);
                   }
                 },
               ),
@@ -360,87 +435,107 @@ class _HomeScreenState extends State<HomeScreen> {
         final history = list[index];
         final hasThumb = history.coverThumbnailUrl != null && File(history.coverThumbnailUrl!).existsSync();
 
-        return InkWell(
-          onTap: () => _openComicFromHistory(context, history),
-          borderRadius: BorderRadius.circular(12),
-          child: Container(
-            decoration: BoxDecoration(
-              color: const Color(0xFF1B202B),
+        return Stack(
+          children: [
+            InkWell(
+              onTap: () => _openComicFromHistory(context, history),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white10),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-                    child: Container(
-                      width: double.infinity,
-                      color: Colors.black26,
-                      child: hasThumb
-                          ? Image.file(
-                              File(history.coverThumbnailUrl!),
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, _, _) => const Center(
-                                child: Icon(Icons.auto_stories, color: Colors.blueAccent, size: 36),
-                              ),
-                            )
-                          : const Center(
-                              child: Icon(Icons.auto_stories, color: Colors.blueAccent, size: 36),
-                            ),
-                    ),
-                  ),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1B202B),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white10),
                 ),
-                Padding(
-                  padding: const EdgeInsets.all(10),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        history.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        history.accountName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: Colors.white38, fontSize: 10),
-                      ),
-                      const SizedBox(height: 6),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(2),
-                        child: LinearProgressIndicator(
-                          value: history.progress,
-                          minHeight: 4,
-                          backgroundColor: Colors.white12,
-                          valueColor: const AlwaysStoppedAnimation<Color>(Colors.blueAccent),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: ClipRRect(
+                        borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                        child: Container(
+                          width: double.infinity,
+                          color: Colors.black26,
+                          child: hasThumb
+                              ? Image.file(
+                                  File(history.coverThumbnailUrl!),
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, _, _) => const Center(
+                                    child: Icon(Icons.auto_stories, color: Colors.blueAccent, size: 36),
+                                  ),
+                                )
+                              : const Center(
+                                  child: Icon(Icons.auto_stories, color: Colors.blueAccent, size: 36),
+                                ),
                         ),
                       ),
-                      const SizedBox(height: 4),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
-                            '${history.lastPage + 1} / ${history.totalPages}p',
-                            style: const TextStyle(color: Colors.blueAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                            history.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                           ),
+                          const SizedBox(height: 3),
                           Text(
-                            '${history.progressPercent}%',
-                            style: const TextStyle(color: Colors.white54, fontSize: 10),
+                            history.accountName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: Colors.white38, fontSize: 10),
+                          ),
+                          const SizedBox(height: 6),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(2),
+                            child: LinearProgressIndicator(
+                              value: history.progress,
+                              minHeight: 4,
+                              backgroundColor: Colors.white12,
+                              valueColor: const AlwaysStoppedAnimation<Color>(Colors.blueAccent),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                '${history.lastPage + 1} / ${history.totalPages}p',
+                                style: const TextStyle(color: Colors.blueAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                              ),
+                              Text(
+                                '${history.progressPercent}%',
+                                style: const TextStyle(color: Colors.white54, fontSize: 10),
+                              ),
+                            ],
                           ),
                         ],
                       ),
-                    ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Positioned(
+              top: 6,
+              right: 6,
+              child: Material(
+                color: Colors.black54,
+                shape: const CircleBorder(),
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: () => _removeHistoryItem(history),
+                  child: const Padding(
+                    padding: EdgeInsets.all(4),
+                    child: Icon(Icons.close, size: 14, color: Colors.white70),
                   ),
                 ),
-              ],
+              ),
             ),
-          ),
+          ],
         );
       },
     );
@@ -520,6 +615,13 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
                   ),
                 ),
+                IconButton(
+                  icon: const Icon(Icons.close, size: 16, color: Colors.white38),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                  tooltip: '기록 삭제',
+                  onPressed: () => _removeHistoryItem(history),
+                ),
               ],
             ),
           ),
@@ -529,7 +631,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // 목록 뷰: 가로 타일 목록
-  Widget _buildRecentList(BuildContext context, List<ComicReadingHistory> list, ReadingHistoryService historyService) {
+  Widget _buildRecentList(BuildContext context, List<ComicReadingHistory> list) {
     return ListView.separated(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
@@ -594,7 +696,7 @@ class _HomeScreenState extends State<HomeScreen> {
               IconButton(
                 visualDensity: VisualDensity.compact,
                 icon: const Icon(Icons.close, size: 18, color: Colors.white38),
-                onPressed: () => historyService.removeHistory(history.id),
+                onPressed: () => _removeHistoryItem(history),
               ),
             ],
           ),
@@ -608,7 +710,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildRecentDetailsTable(
     BuildContext context,
     List<ComicReadingHistory> list,
-    ReadingHistoryService historyService,
     double maxWidth,
   ) {
     final showAccount = maxWidth > 500;
@@ -735,7 +836,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             padding: EdgeInsets.zero,
                             visualDensity: VisualDensity.compact,
                             icon: const Icon(Icons.close, size: 16, color: Colors.white38),
-                            onPressed: () => historyService.removeHistory(history.id),
+                            onPressed: () => _removeHistoryItem(history),
                           ),
                         ),
                       ],

@@ -72,13 +72,18 @@ class CloudHistorySyncService extends ChangeNotifier {
         // 1. 원격 히스토리 파일 가져오기 (루트 reading_history.json 우선, 없으면 .comic_sync/ 폴더 확인)
         final remoteJsonStr = await _fetchRemoteHistoryJson(service, account);
         List<ComicReadingHistory> remoteHistories = [];
+        Map<String, int> remoteDeleted = {};
 
         if (remoteJsonStr != null && remoteJsonStr.isNotEmpty) {
           try {
             final data = jsonDecode(remoteJsonStr);
             final List<dynamic> list = data is Map ? (data['histories'] as List<dynamic>? ?? []) : (data as List<dynamic>);
             remoteHistories = list.map((e) => ComicReadingHistory.fromJson(e as Map<String, dynamic>)).toList();
-            debugPrint('[CloudSync] 원격 히스토리 ${remoteHistories.length}개 로드 성공 (${account.name})');
+            if (data is Map && data['deletedRecords'] is Map) {
+              final dMap = data['deletedRecords'] as Map<String, dynamic>;
+              remoteDeleted = dMap.map((k, v) => MapEntry(k, (v as num).toInt()));
+            }
+            debugPrint('[CloudSync] 원격 히스토리 ${remoteHistories.length}개, 삭제기록 ${remoteDeleted.length}개 로드 성공 (${account.name})');
           } catch (e) {
             debugPrint('[CloudSync] 원격 JSON 파싱 실패: $e');
           }
@@ -86,17 +91,23 @@ class CloudHistorySyncService extends ChangeNotifier {
           debugPrint('[CloudSync] 원격 히스토리 파일 없음 또는 신규 생성 대상 (${account.name})');
         }
 
-        // 2. 로컬 히스토리와 스마트 병합
-        final mergedList = await ReadingHistoryService.instance.mergeWithRemote(remoteHistories);
+        // 2. 로컬 히스토리와 스마트 병합 (삭제 툼스톤 양방향 반영)
+        final mergedList = await ReadingHistoryService.instance.mergeWithRemote(
+          remoteHistories,
+          remoteDeletedRecords: remoteDeleted,
+        );
         mergedCount = mergedList.length;
 
-        // 3. 최신 병합본을 원격 클라우드 루트에 업로드
+        // 3. 최신 병합본 및 삭제 목록을 원격 클라우드 루트에 업로드
+        final allHistories = ReadingHistoryService.instance.getAllHistories();
+        final localDeleted = await ReadingHistoryService.instance.getDeletedRecords();
         final syncData = {
-          'version': 1,
+          'version': 2,
           'device': defaultTargetPlatform.name,
           'updatedAt': DateTime.now().toUtc().toIso8601String(),
-          'count': mergedList.length,
-          'histories': mergedList.map((e) => e.toJson()).toList(),
+          'count': allHistories.length,
+          'histories': allHistories.map((e) => e.toJson()).toList(),
+          'deletedRecords': localDeleted,
         };
         final payload = jsonEncode(syncData);
         final uploadResult = await _uploadRemoteHistoryJson(service, account, payload);
