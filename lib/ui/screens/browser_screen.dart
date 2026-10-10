@@ -247,20 +247,51 @@ class _BrowserScreenState extends State<BrowserScreen> {
         appBar: AppBar(
           title: Text(currentFolderName, style: const TextStyle(fontWeight: FontWeight.bold)),
           actions: [
-            // 뷰 모드 변경
+            // 윈도우 탐색기 스타일 보기 옵션 드롭다운 메뉴 (큰 아이콘 / 작은 아이콘 / 목록 / 자세히)
             PopupMenuButton<BrowserViewMode>(
-              icon: Icon(_viewMode.icon),
-              tooltip: '보기 모드 변경',
+              tooltip: '보기 옵션 (${_viewMode.label})',
               onSelected: _changeViewMode,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                margin: const EdgeInsets.symmetric(vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withAlpha(15),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(_viewMode.icon, size: 18, color: Colors.blueAccent),
+                    const SizedBox(width: 6),
+                    Text(
+                      _viewMode.label,
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(width: 2),
+                    const Icon(Icons.arrow_drop_down, size: 18, color: Colors.white70),
+                  ],
+                ),
+              ),
               itemBuilder: (context) => BrowserViewMode.values.map((mode) {
                 final isSelected = mode == _viewMode;
-                return PopupMenuItem(
+                return PopupMenuItem<BrowserViewMode>(
                   value: mode,
                   child: Row(
                     children: [
-                      Icon(mode.icon, size: 20, color: isSelected ? Colors.blueAccent : Colors.white70),
+                      Icon(
+                        mode.icon,
+                        size: 20,
+                        color: isSelected ? Colors.blueAccent : Colors.white70,
+                      ),
                       const SizedBox(width: 12),
-                      Text(mode.label, style: TextStyle(color: isSelected ? Colors.blueAccent : Colors.white)),
+                      Text(
+                        mode.label,
+                        style: TextStyle(
+                          color: isSelected ? Colors.blueAccent : Colors.white,
+                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                        ),
+                      ),
                     ],
                   ),
                 );
@@ -338,34 +369,63 @@ class _BrowserScreenState extends State<BrowserScreen> {
       height: 44,
       width: double.infinity,
       color: Colors.black26,
-      child: ListView.separated(
-        controller: _breadcrumbScrollController,
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        itemCount: _folderStack.length,
-        separatorBuilder: (_, _) => const Icon(Icons.chevron_right, size: 18, color: Colors.white38),
-        itemBuilder: (context, index) {
-          final isLast = index == _folderStack.length - 1;
-          final title = _folderStack[index].value;
-
-          return Center(
-            child: InkWell(
-              onTap: isLast ? null : () => _navigateToIndex(index),
-              borderRadius: BorderRadius.circular(6),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                child: Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: isLast ? FontWeight.bold : FontWeight.normal,
-                    color: isLast ? Colors.blueAccent : Colors.white70,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Row(
+        children: [
+          // 1. 앱의 첫 시작 화면(HomeScreen)으로 즉시 돌아가는 홈 버튼
+          InkWell(
+            onTap: () => Navigator.of(context).pop(),
+            borderRadius: BorderRadius.circular(6),
+            child: const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.home, size: 18, color: Colors.blueAccent),
+                  SizedBox(width: 4),
+                  Text(
+                    '홈',
+                    style: TextStyle(color: Colors.blueAccent, fontSize: 13, fontWeight: FontWeight.bold),
                   ),
-                ),
+                ],
               ),
             ),
-          );
-        },
+          ),
+          const Icon(Icons.chevron_right, size: 18, color: Colors.white38),
+
+          // 2. 현재 계정 및 폴더 탐색 경로 목록
+          Expanded(
+            child: ListView.separated(
+              controller: _breadcrumbScrollController,
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              itemCount: _folderStack.length,
+              separatorBuilder: (_, _) => const Icon(Icons.chevron_right, size: 18, color: Colors.white38),
+              itemBuilder: (context, index) {
+                final isLast = index == _folderStack.length - 1;
+                final title = _folderStack[index].value;
+
+                return Center(
+                  child: InkWell(
+                    onTap: isLast ? null : () => _navigateToIndex(index),
+                    borderRadius: BorderRadius.circular(6),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                      child: Text(
+                        title,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: isLast ? FontWeight.bold : FontWeight.normal,
+                          color: isLast ? Colors.white : Colors.white70,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }

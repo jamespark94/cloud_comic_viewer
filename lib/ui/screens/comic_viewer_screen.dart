@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
@@ -635,41 +636,34 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
     );
   }
 
-  /// 좌우 분할 페이지 렌더러 (ClipRect + Align 50% widthFactor 무손실 고속 분할)
+  /// 좌우 분할 페이지 렌더러 (원본의 정확한 왼쪽 50% 또는 오른쪽 50%를 화면에 꽉 채워 렌더링)
   Widget _buildSplitPageImage(
     ComicPage page, {
     required bool isLeft,
     required ViewerSettings settings,
     required int index,
   }) {
+    BoxFit fit;
+    switch (settings.fitMode) {
+      case FitMode.fitWidth:
+        fit = BoxFit.fitWidth;
+        break;
+      case FitMode.fitHeight:
+        fit = BoxFit.fitHeight;
+        break;
+      case FitMode.contain:
+        fit = BoxFit.contain;
+        break;
+    }
+
     return FutureBuilder<Uint8List>(
       future: page.getBytes(),
       builder: (context, snapshot) {
         if (snapshot.hasData) {
-          return LayoutBuilder(
-            builder: (context, constraints) {
-              return Center(
-                child: ClipRect(
-                  child: Align(
-                    alignment: isLeft ? Alignment.centerLeft : Alignment.centerRight,
-                    widthFactor: 0.5,
-                    child: Image.memory(
-                      snapshot.data!,
-                      fit: BoxFit.fitHeight,
-                      height: constraints.maxHeight,
-                      filterQuality: FilterQuality.medium,
-                      errorBuilder: (context, error, stackTrace) => Container(
-                        height: 300,
-                        color: Colors.black12,
-                        child: Center(
-                          child: Text('${index + 1}p 이미지 로드 실패', style: const TextStyle(color: Colors.white54)),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              );
-            },
+          return SplitImageView(
+            imageBytes: snapshot.data!,
+            isLeft: isLeft,
+            fit: fit,
           );
         }
         return _buildLoadingPlaceholder();
@@ -1013,5 +1007,119 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
       ),
     );
   }
+}
+
+class SplitImageView extends StatefulWidget {
+  final Uint8List imageBytes;
+  final bool isLeft;
+  final BoxFit fit;
+
+  const SplitImageView({
+    super.key,
+    required this.imageBytes,
+    required this.isLeft,
+    required this.fit,
+  });
+
+  @override
+  State<SplitImageView> createState() => _SplitImageViewState();
+}
+
+class _SplitImageViewState extends State<SplitImageView> {
+  ui.Image? _image;
+
+  @override
+  void initState() {
+    super.initState();
+    _decodeImage();
+  }
+
+  @override
+  void didUpdateWidget(covariant SplitImageView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.imageBytes != widget.imageBytes) {
+      _decodeImage();
+    }
+  }
+
+  void _decodeImage() {
+    ui.decodeImageFromList(widget.imageBytes, (img) {
+      if (mounted) {
+        setState(() => _image = img);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_image == null) {
+      return Container(
+        height: 400,
+        color: Colors.black12,
+        child: const Center(
+          child: SizedBox(
+            width: 28,
+            height: 28,
+            child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.blueAccent),
+          ),
+        ),
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return CustomPaint(
+          size: Size(constraints.maxWidth, constraints.maxHeight),
+          painter: SplitImagePainter(
+            image: _image!,
+            isLeft: widget.isLeft,
+            fit: widget.fit,
+          ),
+        );
+      },
+    );
+  }
+}
+
+class SplitImagePainter extends CustomPainter {
+  final ui.Image image;
+  final bool isLeft;
+  final BoxFit fit;
+
+  SplitImagePainter({
+    required this.image,
+    required this.isLeft,
+    required this.fit,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final imgW = image.width.toDouble();
+    final imgH = image.height.toDouble();
+    final halfW = imgW / 2;
+
+    // 1. 원본 이미지에서 정확한 절반 영역 추출 (왼쪽 50% 또는 오른쪽 50%)
+    final srcRect = isLeft
+        ? Rect.fromLTWH(0, 0, halfW, imgH)
+        : Rect.fromLTWH(halfW, 0, halfW, imgH);
+
+    // 2. 화면 영역(size)에 절반 페이지 종횡비를 맞추어 꽉 채움 (applyBoxFit)
+    final fittedSizes = applyBoxFit(fit, Size(halfW, imgH), size);
+    final dstSize = fittedSizes.destination;
+    final dx = (size.width - dstSize.width) / 2;
+    final dy = (size.height - dstSize.height) / 2;
+    final dstRect = Rect.fromLTWH(dx, dy, dstSize.width, dstSize.height);
+
+    canvas.drawImageRect(
+      image,
+      srcRect,
+      dstRect,
+      Paint()..filterQuality = FilterQuality.medium,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant SplitImagePainter oldDelegate) =>
+      oldDelegate.image != image || oldDelegate.isLeft != isLeft || oldDelegate.fit != fit;
 }
 
