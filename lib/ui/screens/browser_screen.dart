@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
@@ -14,8 +15,10 @@ import '../../utils/permission_utils.dart';
 import 'comic_viewer_screen.dart';
 
 enum BrowserViewMode {
-  details('자세히 보기', Icons.view_list),
-  largeIcons('큰 아이콘 (그리드)', Icons.grid_view);
+  largeIcons('큰 아이콘', Icons.grid_view_rounded),
+  smallIcons('작은 아이콘', Icons.view_comfy_alt_outlined),
+  list('목록', Icons.format_list_bulleted_rounded),
+  details('자세히', Icons.table_rows_outlined);
 
   final String label;
   final IconData icon;
@@ -453,13 +456,246 @@ class _BrowserScreenState extends State<BrowserScreen> {
 
     return RefreshIndicator(
       onRefresh: _loadFolder,
-      child: _viewMode == BrowserViewMode.largeIcons
-          ? _buildGridView(context)
-          : _buildListView(context),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          switch (_viewMode) {
+            case BrowserViewMode.largeIcons:
+              return _buildLargeIconsView(context, constraints.maxWidth);
+            case BrowserViewMode.smallIcons:
+              return _buildSmallIconsView(context, constraints.maxWidth);
+            case BrowserViewMode.list:
+              return _buildListView(context);
+            case BrowserViewMode.details:
+              return _buildDetailsView(context);
+          }
+        },
+      ),
     );
   }
 
+  // 1. 큰 아이콘 보기 (대형 카드 그리드)
+  Widget _buildLargeIconsView(BuildContext context, double maxWidth) {
+    final cols = math.max(2, (maxWidth / 160).floor());
+    return GridView.builder(
+      padding: const EdgeInsets.all(12),
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: cols,
+        childAspectRatio: 0.78,
+        crossAxisSpacing: 10,
+        mainAxisSpacing: 10,
+      ),
+      itemCount: _filteredItems.length,
+      itemBuilder: (context, index) {
+        final item = _filteredItems[index];
+
+        if (item.isFolder) {
+          return InkWell(
+            onTap: () => _navigateToFolder(item),
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1B202B),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.amber.withAlpha(40)),
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.folder, size: 54, color: Colors.amber),
+                  const SizedBox(height: 10),
+                  Text(
+                    item.name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text('폴더', style: TextStyle(color: Colors.white38, fontSize: 10.5)),
+                ],
+              ),
+            ),
+          );
+        }
+
+        final isArchive = item.isComicArchive;
+        final iconColor = isArchive ? Colors.blueAccent : Colors.tealAccent;
+
+        return InkWell(
+          onTap: () => _openComicViewer(item),
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1B202B),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 58,
+                  height: 58,
+                  decoration: BoxDecoration(
+                    color: iconColor.withAlpha(25),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    isArchive ? Icons.auto_stories : Icons.image,
+                    size: 34,
+                    color: iconColor,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  item.name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, height: 1.25),
+                ),
+                const SizedBox(height: 4),
+                if (item.formattedSize.isNotEmpty)
+                  Text(
+                    item.formattedSize,
+                    style: const TextStyle(color: Colors.white38, fontSize: 10.5),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // 2. 작은 아이콘 보기 (컴팩트 그리드)
+  Widget _buildSmallIconsView(BuildContext context, double maxWidth) {
+    final cols = math.max(3, (maxWidth / 105).floor());
+    return GridView.builder(
+      padding: const EdgeInsets.all(10),
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: cols,
+        childAspectRatio: 0.88,
+        crossAxisSpacing: 8,
+        mainAxisSpacing: 8,
+      ),
+      itemCount: _filteredItems.length,
+      itemBuilder: (context, index) {
+        final item = _filteredItems[index];
+
+        if (item.isFolder) {
+          return InkWell(
+            onTap: () => _navigateToFolder(item),
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1B202B),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.white10),
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.folder, size: 36, color: Colors.amber),
+                  const SizedBox(height: 6),
+                  Text(
+                    item.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
+        final isArchive = item.isComicArchive;
+        final iconColor = isArchive ? Colors.blueAccent : Colors.tealAccent;
+
+        return InkWell(
+          onTap: () => _openComicViewer(item),
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1B202B),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  isArchive ? Icons.auto_stories : Icons.image,
+                  size: 32,
+                  color: iconColor,
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  item.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w500),
+                ),
+                if (item.formattedSize.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    item.formattedSize,
+                    style: const TextStyle(color: Colors.white38, fontSize: 9.5),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // 3. 목록 보기 (심플 1줄 리스트)
   Widget _buildListView(BuildContext context) {
+    return ListView.builder(
+      itemCount: _filteredItems.length,
+      itemBuilder: (context, index) {
+        final item = _filteredItems[index];
+
+        if (item.isFolder) {
+          return ListTile(
+            dense: true,
+            visualDensity: const VisualDensity(vertical: -1),
+            leading: const Icon(Icons.folder, color: Colors.amber, size: 26),
+            title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13.5)),
+            trailing: const Icon(Icons.chevron_right, size: 18, color: Colors.white24),
+            onTap: () => _navigateToFolder(item),
+          );
+        }
+
+        final isArchive = item.isComicArchive;
+        final iconColor = isArchive ? Colors.blueAccent : Colors.tealAccent;
+
+        return ListTile(
+          dense: true,
+          visualDensity: const VisualDensity(vertical: -1),
+          leading: Icon(isArchive ? Icons.auto_stories : Icons.image, color: iconColor, size: 24),
+          title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13.5)),
+          trailing: Text(
+            item.formattedSize,
+            style: const TextStyle(color: Colors.white38, fontSize: 11),
+          ),
+          onTap: () => _openComicViewer(item),
+        );
+      },
+    );
+  }
+
+  // 4. 자세히 보기 (상세 정보 포함 리스트)
+  Widget _buildDetailsView(BuildContext context) {
     return ListView.builder(
       itemCount: _filteredItems.length,
       itemBuilder: (context, index) {
@@ -498,97 +734,13 @@ class _BrowserScreenState extends State<BrowserScreen> {
               ],
               if (item.modifiedTime != null)
                 Text(
-                  DateFormat('yyyy-MM-dd').format(item.modifiedTime!),
+                  DateFormat('yyyy-MM-dd HH:mm').format(item.modifiedTime!),
                   style: const TextStyle(color: Colors.white38, fontSize: 11),
                 ),
             ],
           ),
           trailing: const Icon(Icons.play_circle_outline, color: Colors.blueAccent, size: 24),
           onTap: () => _openComicViewer(item),
-        );
-      },
-    );
-  }
-
-  Widget _buildGridView(BuildContext context) {
-    return GridView.builder(
-      padding: const EdgeInsets.all(12),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        childAspectRatio: 0.75,
-        crossAxisSpacing: 10,
-        mainAxisSpacing: 10,
-      ),
-      itemCount: _filteredItems.length,
-      itemBuilder: (context, index) {
-        final item = _filteredItems[index];
-
-        if (item.isFolder) {
-          return InkWell(
-            onTap: () => _navigateToFolder(item),
-            borderRadius: BorderRadius.circular(10),
-            child: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1E212B),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.white10),
-              ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.folder, size: 48, color: Colors.amber),
-                  const SizedBox(height: 8),
-                  Text(
-                    item.name,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                  ),
-                ],
-              ),
-            ),
-          );
-        }
-
-        final isArchive = item.isComicArchive;
-
-        return InkWell(
-          onTap: () => _openComicViewer(item),
-          borderRadius: BorderRadius.circular(10),
-          child: Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1E212B),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.white10),
-            ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  isArchive ? Icons.auto_stories : Icons.image,
-                  size: 44,
-                  color: isArchive ? Colors.blueAccent : Colors.tealAccent,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  item.name,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
-                ),
-                const SizedBox(height: 4),
-                if (item.formattedSize.isNotEmpty)
-                  Text(
-                    item.formattedSize,
-                    style: const TextStyle(color: Colors.white38, fontSize: 10),
-                  ),
-              ],
-            ),
-          ),
         );
       },
     );

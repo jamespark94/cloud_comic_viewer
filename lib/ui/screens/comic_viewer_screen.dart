@@ -11,8 +11,10 @@ import '../../services/cloud_service_interface.dart';
 import '../../services/comic_archive_service.dart';
 import '../../services/comic_cache_manager.dart';
 import '../../services/reading_history_service.dart';
+import '../../services/thumbnail_service.dart';
 import '../../services/viewer_settings_service.dart';
 import '../../services/zip_stream_reader.dart';
+import '../../utils/manga_detection_utils.dart';
 import '../widgets/comic_thumbnail_sheet.dart';
 import '../widgets/viewer_settings_dialog.dart';
 
@@ -232,6 +234,23 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
           _isLoading = false;
         });
 
+        // 1. 일본 만화 자동 감지 (파일명/폴더명 키워드 및 히라가나/가타카나)
+        final isJpManga = MangaDetectionUtils.isLikelyJapaneseManga(
+          _currentItem.name,
+          parentFolder: _currentItem.parentId,
+        );
+        final settingsService = ViewerSettingsService.instance;
+        if (isJpManga && settingsService.settings.readingDirection != ReadingDirection.rightToLeft) {
+          settingsService.setReadingDirection(ReadingDirection.rightToLeft);
+          _showModeToast('🇯🇵 일본 만화 감지: 우➔좌 넘김 모드 자동 적용');
+        }
+
+        // 2. 인접 페이지 사전 프리페치 (메모리 지연 없는 스트리밍 캐싱)
+        _preloadAdjacentPages(targetPage);
+
+        // 3. 읽은 만화 히스토리용 표지 썸네일 비동기 캐싱
+        _saveCoverThumbnailAsync();
+
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (_pageController.hasClients) {
             final targetDisplay = DisplayPageBuilder.findDisplayIndex(_displayItems, _currentPageIndex);
@@ -249,13 +268,52 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
     }
   }
 
+  /// 사용자가 읽고 있는 현재 페이지 앞뒤 1~3페이지를 백그라운드에서 사전 프리로드하여
+  /// 페이지 넘김 시 0초 딜레이(즉각 열람)를 보장합니다.
+  void _preloadAdjacentPages(int currentOriginalIndex) {
+    if (_pages.isEmpty) return;
+    // 다음 1~3페이지 프리페치
+    for (int step = 1; step <= 3; step++) {
+      final nextIdx = currentOriginalIndex + step;
+      if (nextIdx < _pages.length) {
+        _pages[nextIdx].getBytes().catchError((_) => Uint8List(0));
+      }
+    }
+    // 이전 1페이지 프리페치
+    final prevIdx = currentOriginalIndex - 1;
+    if (prevIdx >= 0) {
+      _pages[prevIdx].getBytes().catchError((_) => Uint8List(0));
+    }
+  }
+
+  /// 읽은 만화 히스토리 목록용 첫 페이지 표지 썸네일을 로컬 캐시에 저장합니다.
+  void _saveCoverThumbnailAsync() {
+    if (_pages.isEmpty) return;
+    Future.microtask(() async {
+      try {
+        final existing = await ThumbnailService.getCoverThumbnailPath(_currentItem.id);
+        if (existing != null) {
+          ReadingHistoryService.instance.updateThumbnail(_currentItem.id, existing);
+          return;
+        }
+        final coverBytes = await _pages.first.getBytes();
+        final path = await ThumbnailService.saveCoverThumbnail(_currentItem.id, coverBytes);
+        if (path != null) {
+          ReadingHistoryService.instance.updateThumbnail(_currentItem.id, path);
+        }
+      } catch (_) {}
+    });
+  }
+
   void _onDisplayPageChanged(int displayIndex) {
     if (displayIndex < 0 || displayIndex >= _displayItems.length) return;
+    final originalIdx = _displayItems[displayIndex].primaryOriginalIndex;
     setState(() {
       _currentDisplayIndex = displayIndex;
-      _currentPageIndex = _displayItems[displayIndex].primaryOriginalIndex;
+      _currentPageIndex = originalIdx;
     });
     _saveReadingProgress();
+    _preloadAdjacentPages(originalIdx);
   }
 
   void _jumpToPage(int originalIndex) {
@@ -277,6 +335,7 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
       }
     }
     _saveReadingProgress();
+    _preloadAdjacentPages(originalIndex);
   }
 
   void _toggleControls() {
@@ -743,6 +802,29 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
             ),
             tooltip: '화면 보기 모드: ${settingsService.settings.displayMode.label}',
             onPressed: () => _cycleDisplayMode(settingsService),
+          ),
+          // 읽기 방향 (우➔좌 ⇄ 좌➔우) 빠른 토글 버튼
+          IconButton(
+            icon: Icon(
+              settingsService.settings.readingDirection == ReadingDirection.rightToLeft
+                  ? Icons.format_textdirection_r_to_l
+                  : Icons.format_textdirection_l_to_r,
+              color: settingsService.settings.readingDirection == ReadingDirection.rightToLeft
+                  ? Colors.amberAccent
+                  : Colors.white,
+            ),
+            tooltip: settingsService.settings.readingDirection == ReadingDirection.rightToLeft
+                ? '읽기 방향: 우➔좌 (일본식) • 탭하여 변경'
+                : '읽기 방향: 좌➔우 (일반) • 탭하여 변경',
+            onPressed: () {
+              final newDir = settingsService.settings.readingDirection == ReadingDirection.rightToLeft
+                  ? ReadingDirection.leftToRight
+                  : ReadingDirection.rightToLeft;
+              settingsService.setReadingDirection(newDir);
+              _showModeToast(newDir == ReadingDirection.rightToLeft
+                  ? '읽기 방향: 우➔좌 (일본식)'
+                  : '읽기 방향: 좌➔우 (일반)');
+            },
           ),
           // 웹툰 <-> 페이지 모드 빠른 토글 버튼
           IconButton(

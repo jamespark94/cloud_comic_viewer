@@ -65,6 +65,26 @@ class ReadingHistoryService extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> updateThumbnail(String id, String thumbnailPath) async {
+    final existing = _histories[id];
+    if (existing != null) {
+      _histories[id] = ComicReadingHistory(
+        id: existing.id,
+        accountId: existing.accountId,
+        accountName: existing.accountName,
+        cloudType: existing.cloudType,
+        title: existing.title,
+        parentFolderId: existing.parentFolderId,
+        lastPage: existing.lastPage,
+        totalPages: existing.totalPages,
+        lastReadAt: existing.lastReadAt,
+        coverThumbnailUrl: thumbnailPath,
+      );
+      await _persist();
+      notifyListeners();
+    }
+  }
+
   Future<void> removeHistory(String id) async {
     _histories.remove(id);
     await _persist();

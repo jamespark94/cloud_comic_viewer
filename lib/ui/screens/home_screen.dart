@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../models/cloud_account.dart';
@@ -142,59 +143,84 @@ class HomeScreen extends StatelessWidget {
       },
       borderRadius: BorderRadius.circular(12),
       child: Container(
-        width: 220,
-        padding: const EdgeInsets.all(12),
+        width: 240,
+        padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
           color: const Color(0xFF1B202B),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: Colors.white10),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Row(
           children: [
-            Row(
-              children: [
-                const Icon(Icons.auto_stories, color: Colors.blueAccent, size: 22),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
+            // 표지 썸네일 (만화책 표지 종횡비)
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: Container(
+                width: 54,
+                height: 76,
+                color: Colors.black38,
+                child: history.coverThumbnailUrl != null && File(history.coverThumbnailUrl!).existsSync()
+                    ? Image.file(
+                        File(history.coverThumbnailUrl!),
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => const Center(
+                          child: Icon(Icons.auto_stories, color: Colors.blueAccent, size: 24),
+                        ),
+                      )
+                    : const Center(
+                        child: Icon(Icons.auto_stories, color: Colors.blueAccent, size: 24),
+                      ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            // 만화 정보 및 진행률
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
                     history.accountName,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.white54, fontSize: 11),
+                    style: const TextStyle(color: Colors.white54, fontSize: 10),
                   ),
-                ),
-              ],
-            ),
-            const Spacer(),
-            Text(
-              history.title,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, height: 1.3),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  '${history.lastPage + 1} / ${history.totalPages}p',
-                  style: const TextStyle(color: Colors.blueAccent, fontSize: 11, fontWeight: FontWeight.bold),
-                ),
-                Text(
-                  '${history.progressPercent}%',
-                  style: const TextStyle(color: Colors.white38, fontSize: 11),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(2),
-              child: LinearProgressIndicator(
-                value: history.progress,
-                minHeight: 3,
-                backgroundColor: Colors.white12,
-                valueColor: const AlwaysStoppedAnimation<Color>(Colors.blueAccent),
+                  Text(
+                    history.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, height: 1.25),
+                  ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            '${history.lastPage + 1} / ${history.totalPages}p',
+                            style: const TextStyle(color: Colors.blueAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                          ),
+                          Text(
+                            '${history.progressPercent}%',
+                            style: const TextStyle(color: Colors.white38, fontSize: 10),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 3),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(2),
+                        child: LinearProgressIndicator(
+                          value: history.progress,
+                          minHeight: 3,
+                          backgroundColor: Colors.white12,
+                          valueColor: const AlwaysStoppedAnimation<Color>(Colors.blueAccent),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
           ],
