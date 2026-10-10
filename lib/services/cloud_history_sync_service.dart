@@ -17,7 +17,8 @@ class CloudHistorySyncService extends ChangeNotifier {
 
   CloudHistorySyncService._();
 
-  static const String syncFileName = 'reading_history.json';
+  static const String syncFileName = 'comic_reading_history.json';
+  static const String legacySyncFileName = 'reading_history.json';
 
   bool _isSyncing = false;
   bool get isSyncing => _isSyncing;
@@ -191,10 +192,10 @@ class CloudHistorySyncService extends ChangeNotifier {
       }
     }
 
-    // 2. 하위 호환: 기존 .comic_sync/reading_history.json 파일이 있는지 확인
+    // 2. 하위 호환: 기존 reading_history.json 파일이 있는지 확인
     try {
       final legacyUri = Uri.https('www.googleapis.com', '/drive/v3/files', {
-        'q': "name = '$syncFileName' and trashed = false",
+        'q': "name = '$legacySyncFileName' and trashed = false",
         'fields': 'files(id, name)',
       });
       final legacyRes = await http.get(legacyUri, headers: headers);
@@ -303,7 +304,13 @@ class CloudHistorySyncService extends ChangeNotifier {
     final headers = await service.getStreamHeaders();
 
     final fileUrl = '$baseUrl/$syncFileName';
-    final res = await http.get(Uri.parse(fileUrl), headers: headers);
+    var res = await http.get(Uri.parse(fileUrl), headers: headers);
+    if (res.statusCode == 200) {
+      return utf8.decode(res.bodyBytes);
+    }
+    // legacy fallback
+    final legacyUrl = '$baseUrl/$legacySyncFileName';
+    res = await http.get(Uri.parse(legacyUrl), headers: headers);
     if (res.statusCode == 200) {
       return utf8.decode(res.bodyBytes);
     }
@@ -338,7 +345,13 @@ class CloudHistorySyncService extends ChangeNotifier {
   Future<String?> _fetchOneDrive(CloudService service, CloudAccount account) async {
     final headers = await service.getStreamHeaders();
     final url = 'https://graph.microsoft.com/v1.0/me/drive/root:/$syncFileName:/content';
-    final res = await http.get(Uri.parse(url), headers: headers);
+    var res = await http.get(Uri.parse(url), headers: headers);
+    if (res.statusCode == 200) {
+      return utf8.decode(res.bodyBytes);
+    }
+    // legacy fallback
+    final legacyUrl = 'https://graph.microsoft.com/v1.0/me/drive/root:/$legacySyncFileName:/content';
+    res = await http.get(Uri.parse(legacyUrl), headers: headers);
     if (res.statusCode == 200) {
       return utf8.decode(res.bodyBytes);
     }
@@ -370,11 +383,22 @@ class CloudHistorySyncService extends ChangeNotifier {
   Future<String?> _fetchDropbox(CloudService service, CloudAccount account) async {
     final headers = await service.getStreamHeaders();
     final url = 'https://content.dropboxapi.com/2/files/download';
-    final res = await http.post(
+    var res = await http.post(
       Uri.parse(url),
       headers: {
         ...headers,
         'Dropbox-API-Arg': jsonEncode({'path': '/$syncFileName'}),
+      },
+    );
+    if (res.statusCode == 200) {
+      return utf8.decode(res.bodyBytes);
+    }
+    // legacy fallback
+    res = await http.post(
+      Uri.parse(url),
+      headers: {
+        ...headers,
+        'Dropbox-API-Arg': jsonEncode({'path': '/$legacySyncFileName'}),
       },
     );
     if (res.statusCode == 200) {
