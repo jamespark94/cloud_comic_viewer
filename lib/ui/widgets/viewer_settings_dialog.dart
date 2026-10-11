@@ -222,6 +222,18 @@ class ViewerSettingsDialog extends StatelessWidget {
                   visualDensity: VisualDensity.compact,
                 ),
               ),
+              const SizedBox(height: 8),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('화면보다 작은 이미지 확대 맞춤', style: TextStyle(color: Colors.white, fontSize: 13)),
+                subtitle: const Text(
+                  '원본 크기가 화면보다 작을 때 비율을 유지하며 화면에 맞춥니다',
+                  style: TextStyle(color: Colors.white54, fontSize: 11),
+                ),
+                value: settings.fitSmallImages,
+                activeThumbColor: Colors.blueAccent,
+                onChanged: (_) => settingsService.toggleFitSmallImages(),
+              ),
 
               // 4. 배경 테마
               const SizedBox(height: 16),

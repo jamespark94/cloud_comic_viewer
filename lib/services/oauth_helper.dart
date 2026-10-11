@@ -27,23 +27,35 @@ class OAuthHelper {
     if (trimmed.isEmpty) return false;
 
     String? code;
+
+    // 1. URL 형태인 경우 queryParameters에서 code 추출 (http:// 스킴 보정)
     try {
-      final uri = Uri.tryParse(trimmed);
+      var parseTarget = trimmed;
+      if (!parseTarget.startsWith('http://') && !parseTarget.startsWith('https://')) {
+        parseTarget = 'http://$parseTarget';
+      }
+      final uri = Uri.tryParse(parseTarget);
       if (uri != null && uri.queryParameters.containsKey('code')) {
         code = uri.queryParameters['code'];
       }
     } catch (_) {}
 
+    // 2. 정규식으로 code= 파라미터 추출 (& 및 # 이전까지 추출)
     if (code == null && trimmed.contains('code=')) {
-      final match = RegExp(r'[?&]code=([^&]+)').firstMatch(trimmed);
+      final match = RegExp(r'[?&]code=([^&#\s]+)').firstMatch(trimmed);
       if (match != null) {
         code = Uri.decodeComponent(match.group(1)!);
       }
     }
 
-    code ??= trimmed;
+    // 3. 만약 URL이 아니고 직접 코드만 입력한 경우 (예: 4/0A... 또는 공백 없는 영숫자/특수문자 코드)
+    if (code == null) {
+      if (trimmed.startsWith('4/') || (!trimmed.startsWith('http://') && !trimmed.startsWith('https://') && !trimmed.contains('/'))) {
+        code = trimmed;
+      }
+    }
 
-    if (code.isNotEmpty && _activeAuthCompleter != null && !_activeAuthCompleter!.isCompleted) {
+    if (code != null && code.isNotEmpty && _activeAuthCompleter != null && !_activeAuthCompleter!.isCompleted) {
       _activeAuthCompleter!.complete(code);
       return true;
     }
@@ -70,12 +82,16 @@ class OAuthHelper {
     HttpServer? serverIpv6;
 
     try {
-      serverIpv4 = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
+      serverIpv4 = await HttpServer.bind(InternetAddress.loopbackIPv4, port, shared: true);
     } catch (_) {
       try {
-        serverIpv4 = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      } catch (e) {
-        throw Exception('로컬 루프백 서버 바인드 실패: $e');
+        serverIpv4 = await HttpServer.bind(InternetAddress.anyIPv4, port, shared: true);
+      } catch (_) {
+        try {
+          serverIpv4 = await HttpServer.bind(InternetAddress.loopbackIPv4, 0, shared: true);
+        } catch (e) {
+          throw Exception('로컬 루프백 서버 바인드 실패: $e');
+        }
       }
     }
 
@@ -186,17 +202,10 @@ class OAuthHelper {
     serverIpv4.listen(handleRequest);
     serverIpv6?.listen(handleRequest);
 
-    // 기본 웹 브라우저 / 커스텀 탭에서 인증 URL 실행
+    // Google 및 클라우드 OAuth는 인앱 웹뷰 차단 정책이 있으므로 시스템 외부 브라우저(Chrome/삼성인터넷)를 최우선으로 실행
     bool launched = false;
     try {
-      if (Platform.isAndroid || Platform.isIOS) {
-        try {
-          launched = await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
-        } catch (_) {
-          launched = false;
-        }
-      }
-      if (!launched && await canLaunchUrl(uri)) {
+      if (await canLaunchUrl(uri)) {
         launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
       }
       if (!launched) {

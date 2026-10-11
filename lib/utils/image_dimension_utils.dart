@@ -1,4 +1,6 @@
 import 'dart:typed_data';
+import 'package:flutter/material.dart';
+import '../models/viewer_settings.dart';
 
 class ImageDimensions {
   final int width;
@@ -11,6 +13,60 @@ class ImageDimensions {
 }
 
 class ImageDimensionUtils {
+  /// 원본 크기(sourceSize), 뷰어 가용 크기(availableSize), FitMode, fitSmallImages 설정에 따라
+  /// 비율을 유지하면서 화면에 맞춘 최종 표시 크기(destination Size)를 계산합니다.
+  static Size calculateDisplaySize({
+    required Size sourceSize,
+    required Size availableSize,
+    required FitMode fitMode,
+    bool fitSmallImages = true,
+    bool isWebtoon = false,
+  }) {
+    if (sourceSize.width <= 0 || sourceSize.height <= 0) {
+      return availableSize;
+    }
+
+    final double aspect = sourceSize.width / sourceSize.height;
+
+    // 1. 웹툰 모드 (세로 스크롤, 높이 무한대)
+    if (isWebtoon || availableSize.height.isInfinite) {
+      final availW = availableSize.width;
+      if (sourceSize.width < availW) {
+        if (fitSmallImages) {
+          // 원본 가로가 화면보다 작으면 가로 폭에 맞추면서 비율 유지 확대
+          return Size(availW, availW / aspect);
+        } else {
+          return sourceSize;
+        }
+      } else {
+        // 원본 가로가 화면보다 크면 가로 폭에 맞추어 축소
+        return Size(availW, availW / aspect);
+      }
+    }
+
+    // 2. 페이지 모드 (가용 영역 가로/세로 유한함)
+    final availW = availableSize.width;
+    final availH = availableSize.height;
+
+    switch (fitMode) {
+      case FitMode.fitWidth:
+        if (fitSmallImages || sourceSize.width > availW) {
+          return Size(availW, availW / aspect);
+        }
+        return sourceSize;
+
+      case FitMode.fitHeight:
+        if (fitSmallImages || sourceSize.height > availH) {
+          return Size(availH * aspect, availH);
+        }
+        return sourceSize;
+
+      case FitMode.contain:
+        final boxFit = fitSmallImages ? BoxFit.contain : BoxFit.scaleDown;
+        final fitted = applyBoxFit(boxFit, sourceSize, availableSize);
+        return fitted.destination;
+    }
+  }
   /// 이미지 바이트의 헤더를 읽어 width와 height를 즉시 반환합니다.
   /// 지원 포맷: PNG, JPEG, GIF, WebP, BMP
   static ImageDimensions? parse(Uint8List bytes) {

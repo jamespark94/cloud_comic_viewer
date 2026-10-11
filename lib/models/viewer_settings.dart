@@ -66,6 +66,7 @@ class ViewerSettings {
   final bool keepScreenOn;
   final bool showPageNumber;
   final bool showClockAndBattery;
+  final bool fitSmallImages; // 화면보다 작은 이미지 확대 맞춤
 
   const ViewerSettings({
     this.readingDirection = ReadingDirection.leftToRight,
@@ -77,6 +78,7 @@ class ViewerSettings {
     this.keepScreenOn = true,
     this.showPageNumber = true,
     this.showClockAndBattery = true,
+    this.fitSmallImages = true,
   });
 
   ViewerSettings copyWith({
@@ -89,6 +91,7 @@ class ViewerSettings {
     bool? keepScreenOn,
     bool? showPageNumber,
     bool? showClockAndBattery,
+    bool? fitSmallImages,
   }) {
     return ViewerSettings(
       readingDirection: readingDirection ?? this.readingDirection,
@@ -100,6 +103,7 @@ class ViewerSettings {
       keepScreenOn: keepScreenOn ?? this.keepScreenOn,
       showPageNumber: showPageNumber ?? this.showPageNumber,
       showClockAndBattery: showClockAndBattery ?? this.showClockAndBattery,
+      fitSmallImages: fitSmallImages ?? this.fitSmallImages,
     );
   }
 
@@ -113,6 +117,7 @@ class ViewerSettings {
         'keepScreenOn': keepScreenOn,
         'showPageNumber': showPageNumber,
         'showClockAndBattery': showClockAndBattery,
+        'fitSmallImages': fitSmallImages,
       };
 
   factory ViewerSettings.fromJson(Map<String, dynamic> json) => ViewerSettings(
@@ -143,5 +148,6 @@ class ViewerSettings {
         keepScreenOn: json['keepScreenOn'] as bool? ?? true,
         showPageNumber: json['showPageNumber'] as bool? ?? true,
         showClockAndBattery: json['showClockAndBattery'] as bool? ?? true,
+        fitSmallImages: json['fitSmallImages'] as bool? ?? true,
       );
 }

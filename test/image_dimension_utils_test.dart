@@ -1,5 +1,7 @@
 import 'dart:typed_data';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:cloud_comic_viewer/models/viewer_settings.dart';
 import 'package:cloud_comic_viewer/utils/image_dimension_utils.dart';
 
 void main() {
@@ -57,6 +59,88 @@ void main() {
       expect(dims.width, 1080);
       expect(dims.height, 1920);
       expect(dims.isWide, isFalse);
+    });
+
+    test('calculateDisplaySize scales up small image while preserving aspect ratio in contain mode', () {
+      // 원본: 400x600, 화면: 1080x1920
+      const source = Size(400, 600);
+      const screen = Size(1080, 1920);
+
+      final result = ImageDimensionUtils.calculateDisplaySize(
+        sourceSize: source,
+        availableSize: screen,
+        fitMode: FitMode.contain,
+        fitSmallImages: true,
+      );
+
+      // 1080 / 400 = 2.7 -> width: 1080, height: 1620 (비율 400/600 유지)
+      expect(result.width, 1080);
+      expect(result.height, 1620);
+      expect(result.width / result.height, closeTo(400 / 600, 0.001));
+    });
+
+    test('calculateDisplaySize scales up small image to fitWidth', () {
+      const source = Size(400, 800);
+      const screen = Size(1080, 1920);
+
+      final result = ImageDimensionUtils.calculateDisplaySize(
+        sourceSize: source,
+        availableSize: screen,
+        fitMode: FitMode.fitWidth,
+        fitSmallImages: true,
+      );
+
+      expect(result.width, 1080);
+      expect(result.height, 2160);
+      expect(result.width / result.height, closeTo(400 / 800, 0.001));
+    });
+
+    test('calculateDisplaySize keeps original size when fitSmallImages is false', () {
+      const source = Size(400, 600);
+      const screen = Size(1080, 1920);
+
+      final result = ImageDimensionUtils.calculateDisplaySize(
+        sourceSize: source,
+        availableSize: screen,
+        fitMode: FitMode.contain,
+        fitSmallImages: false,
+      );
+
+      expect(result.width, 400);
+      expect(result.height, 600);
+    });
+
+    test('calculateDisplaySize handles webtoon mode (unbounded height)', () {
+      const source = Size(600, 1200);
+      const screen = Size(1080, double.infinity);
+
+      final result = ImageDimensionUtils.calculateDisplaySize(
+        sourceSize: source,
+        availableSize: screen,
+        fitMode: FitMode.contain,
+        fitSmallImages: true,
+        isWebtoon: true,
+      );
+
+      expect(result.width, 1080);
+      expect(result.height, 2160);
+      expect(result.width / result.height, closeTo(600 / 1200, 0.001));
+    });
+
+    test('calculateDisplaySize scales down large image normally', () {
+      const source = Size(2000, 3000);
+      const screen = Size(1000, 2000);
+
+      final result = ImageDimensionUtils.calculateDisplaySize(
+        sourceSize: source,
+        availableSize: screen,
+        fitMode: FitMode.contain,
+        fitSmallImages: true,
+      );
+
+      expect(result.width, 1000);
+      expect(result.height, 1500);
+      expect(result.width / result.height, closeTo(2000 / 3000, 0.001));
     });
   });
 }

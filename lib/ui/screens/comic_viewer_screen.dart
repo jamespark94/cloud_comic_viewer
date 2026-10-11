@@ -18,6 +18,7 @@ import '../../services/reading_history_service.dart';
 import '../../services/thumbnail_service.dart';
 import '../../services/viewer_settings_service.dart';
 import '../../services/zip_stream_reader.dart';
+import '../../utils/image_dimension_utils.dart';
 import '../../utils/manga_detection_utils.dart';
 import '../widgets/comic_thumbnail_sheet.dart';
 import '../widgets/viewer_settings_dialog.dart';
@@ -654,7 +655,7 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
               initialScrollIndex: _currentPageIndex,
               itemCount: _pages.length,
               itemBuilder: (context, index) {
-                return _buildSinglePageImage(_pages[index], settings, index);
+                return _buildSinglePageImage(_pages[index], settings, index, isWebtoon: true);
               },
             ),
           );
@@ -711,7 +712,12 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
   }
 
   /// 단일 페이지 렌더러
-  Widget _buildSinglePageImage(ComicPage page, ViewerSettings settings, int index) {
+  Widget _buildSinglePageImage(
+    ComicPage page,
+    ViewerSettings settings,
+    int index, {
+    bool isWebtoon = false,
+  }) {
     BoxFit fit;
     switch (settings.fitMode) {
       case FitMode.fitWidth:
@@ -725,25 +731,71 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
         break;
     }
 
-    return FutureBuilder<Uint8List>(
-      future: page.getBytes(),
-      builder: (context, snapshot) {
-        if (snapshot.hasData) {
-          return Image.memory(
-            snapshot.data!,
-            fit: fit,
-            filterQuality: FilterQuality.medium,
-            errorBuilder: (context, error, stackTrace) => Container(
-              height: 300,
-              color: Colors.black12,
-              child: Center(
-                child: Text('${index + 1}p 이미지 로드 실패', style: const TextStyle(color: Colors.white54)),
-              ),
-            ),
-          );
-        }
-        return _buildLoadingPlaceholder();
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableSize = Size(
+          constraints.maxWidth,
+          constraints.hasBoundedHeight ? constraints.maxHeight : double.infinity,
+        );
+
+        return FutureBuilder<Uint8List>(
+          future: page.getBytes(),
+          builder: (context, snapshot) {
+            if (snapshot.hasData) {
+              final bytes = snapshot.data!;
+              final dims = page.dimensions ?? ImageDimensionUtils.parse(bytes);
+
+              if (dims != null && dims.width > 0 && dims.height > 0) {
+                final displaySize = ImageDimensionUtils.calculateDisplaySize(
+                  sourceSize: Size(dims.width.toDouble(), dims.height.toDouble()),
+                  availableSize: availableSize,
+                  fitMode: settings.fitMode,
+                  fitSmallImages: settings.fitSmallImages,
+                  isWebtoon: isWebtoon,
+                );
+
+                return SizedBox(
+                  width: displaySize.width,
+                  height: displaySize.height,
+                  child: Image.memory(
+                    bytes,
+                    width: displaySize.width,
+                    height: displaySize.height,
+                    fit: fit,
+                    filterQuality: FilterQuality.medium,
+                    errorBuilder: (context, error, stackTrace) => _buildImageErrorWidget(index),
+                  ),
+                );
+              }
+
+              // 이미지 치수를 파싱하지 못한 경우의 폴백
+              return SizedBox(
+                width: constraints.maxWidth,
+                height: constraints.hasBoundedHeight ? constraints.maxHeight : null,
+                child: FittedBox(
+                  fit: settings.fitSmallImages ? fit : BoxFit.scaleDown,
+                  child: Image.memory(
+                    bytes,
+                    filterQuality: FilterQuality.medium,
+                    errorBuilder: (context, error, stackTrace) => _buildImageErrorWidget(index),
+                  ),
+                ),
+              );
+            }
+            return _buildLoadingPlaceholder();
+          },
+        );
       },
+    );
+  }
+
+  Widget _buildImageErrorWidget(int index) {
+    return Container(
+      height: 300,
+      color: Colors.black12,
+      child: Center(
+        child: Text('${index + 1}p 이미지 로드 실패', style: const TextStyle(color: Colors.white54)),
+      ),
     );
   }
 
@@ -775,6 +827,7 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
             imageBytes: snapshot.data!,
             isLeft: isLeft,
             fit: fit,
+            fitSmallImages: settings.fitSmallImages,
           );
         }
         return _buildLoadingPlaceholder();
@@ -1124,12 +1177,14 @@ class SplitImageView extends StatefulWidget {
   final Uint8List imageBytes;
   final bool isLeft;
   final BoxFit fit;
+  final bool fitSmallImages;
 
   const SplitImageView({
     super.key,
     required this.imageBytes,
     required this.isLeft,
     required this.fit,
+    this.fitSmallImages = true,
   });
 
   @override
@@ -1185,6 +1240,7 @@ class _SplitImageViewState extends State<SplitImageView> {
             image: _image!,
             isLeft: widget.isLeft,
             fit: widget.fit,
+            fitSmallImages: widget.fitSmallImages,
           ),
         );
       },
@@ -1196,11 +1252,13 @@ class SplitImagePainter extends CustomPainter {
   final ui.Image image;
   final bool isLeft;
   final BoxFit fit;
+  final bool fitSmallImages;
 
   SplitImagePainter({
     required this.image,
     required this.isLeft,
     required this.fit,
+    this.fitSmallImages = true,
   });
 
   @override
@@ -1214,9 +1272,19 @@ class SplitImagePainter extends CustomPainter {
         ? Rect.fromLTWH(0, 0, halfW, imgH)
         : Rect.fromLTWH(halfW, 0, halfW, imgH);
 
-    // 2. 화면 영역(size)에 절반 페이지 종횡비를 맞추어 꽉 채움 (applyBoxFit)
-    final fittedSizes = applyBoxFit(fit, Size(halfW, imgH), size);
-    final dstSize = fittedSizes.destination;
+    // 2. 화면 영역(size)에 절반 페이지 종횡비를 맞춤
+    final targetFit = fitSmallImages
+        ? fit
+        : (halfW > size.width || imgH > size.height ? fit : BoxFit.none);
+
+    final Size dstSize;
+    if (targetFit == BoxFit.none) {
+      dstSize = Size(halfW, imgH);
+    } else {
+      final fittedSizes = applyBoxFit(targetFit, Size(halfW, imgH), size);
+      dstSize = fittedSizes.destination;
+    }
+
     final dx = (size.width - dstSize.width) / 2;
     final dy = (size.height - dstSize.height) / 2;
     final dstRect = Rect.fromLTWH(dx, dy, dstSize.width, dstSize.height);
@@ -1231,6 +1299,9 @@ class SplitImagePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant SplitImagePainter oldDelegate) =>
-      oldDelegate.image != image || oldDelegate.isLeft != isLeft || oldDelegate.fit != fit;
+      oldDelegate.image != image ||
+      oldDelegate.isLeft != isLeft ||
+      oldDelegate.fit != fit ||
+      oldDelegate.fitSmallImages != fitSmallImages;
 }
 

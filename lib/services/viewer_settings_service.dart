@@ -75,6 +75,18 @@ class ViewerSettingsService extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> toggleFitSmallImages() async {
+    _settings = _settings.copyWith(fitSmallImages: !_settings.fitSmallImages);
+    await _persist();
+    notifyListeners();
+  }
+
+  Future<void> setFitSmallImages(bool enable) async {
+    _settings = _settings.copyWith(fitSmallImages: enable);
+    await _persist();
+    notifyListeners();
+  }
+
   Future<void> _persist() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_storageKey, jsonEncode(_settings.toJson()));

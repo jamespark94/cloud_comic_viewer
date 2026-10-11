@@ -19,7 +19,7 @@ class AddAccountDialog extends StatefulWidget {
   State<AddAccountDialog> createState() => _AddAccountDialogState();
 }
 
-class _AddAccountDialogState extends State<AddAccountDialog> {
+class _AddAccountDialogState extends State<AddAccountDialog> with WidgetsBindingObserver {
   // null이면 1단계(서비스 목록 선택), 값이 있으면 2단계(해당 서비스 상세 설정/로그인)
   CloudType? _selectedType;
   bool _isLoading = false;
@@ -47,7 +47,31 @@ class _AddAccountDialogState extends State<AddAccountDialog> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _checkPowerSaveStatus();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _isLoading) {
+      _checkClipboardForAuthCode();
+    }
+  }
+
+  Future<void> _checkClipboardForAuthCode() async {
+    try {
+      final data = await Clipboard.getData(Clipboard.kTextPlain);
+      final text = data?.text?.trim();
+      if (text != null && text.isNotEmpty && (text.contains('code=') || text.contains('localhost'))) {
+        _manualUrlController.text = text;
+        final ok = OAuthHelper.submitManualCallback(text);
+        if (ok && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('클립보드에서 인증 코드를 감지하여 로그인을 완료합니다!')),
+          );
+        }
+      }
+    } catch (_) {}
   }
 
   Future<void> _checkPowerSaveStatus() async {
@@ -65,6 +89,7 @@ class _AddAccountDialogState extends State<AddAccountDialog> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _cancelOAuth();
     _manualRevealTimer?.cancel();
     _clientIdController.dispose();
@@ -91,7 +116,7 @@ class _AddAccountDialogState extends State<AddAccountDialog> {
     if (_selectedType == null) return;
 
     _manualRevealTimer?.cancel();
-    _manualRevealTimer = Timer(const Duration(seconds: 10), () {
+    _manualRevealTimer = Timer(const Duration(seconds: 1), () {
       if (mounted && _isLoading && !_showManualInput) {
         setState(() => _showManualInput = true);
       }
@@ -633,21 +658,72 @@ class _AddAccountDialogState extends State<AddAccountDialog> {
                 if (_showManualInput) ...[
                   const SizedBox(height: 20),
                   const Divider(),
-                  const SizedBox(height: 8),
-                  const Text(
-                    '자동으로 앱으로 돌아오지 않나요?',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.amber.withAlpha(25),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.amber.withAlpha(80)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Row(
+                          children: [
+                            Icon(Icons.info_outline, color: Colors.amber, size: 18),
+                            SizedBox(width: 8),
+                            Text(
+                              '브라우저에서 타임아웃/무한로딩이 발생했나요?',
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.amber),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        const Text(
+                          '구글 인증은 이미 통과된 상태입니다!\n브라우저 상단 주소창(URL)을 길게 눌러 [전체 복사]한 후, 아래 버튼을 누르시면 즉시 연결됩니다.',
+                          style: TextStyle(fontSize: 12, color: Colors.white70, height: 1.4),
+                        ),
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.amber.shade700,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                            ),
+                            icon: const Icon(Icons.content_paste, size: 18),
+                            label: const Text('📋 클립보드 주소 붙여넣고 즉시 등록', style: TextStyle(fontWeight: FontWeight.bold)),
+                            onPressed: () async {
+                              final data = await Clipboard.getData(Clipboard.kTextPlain);
+                              final text = data?.text?.trim();
+                              if (text != null && text.isNotEmpty) {
+                                _manualUrlController.text = text;
+                                final ok = OAuthHelper.submitManualCallback(text);
+                                if (!ok && mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('클립보드에서 유효한 인증 코드를 찾을 수 없습니다. 주소 전체를 다시 복사해주세요.')),
+                                  );
+                                }
+                              } else {
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('클립보드가 비어있습니다. 브라우저 주소창을 복사해주세요.')),
+                                  );
+                                }
+                              }
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    '브라우저 주소창의 전체 URL 또는 code= 값을 아래에 붙여넣으세요:',
-                    style: TextStyle(color: Colors.grey, fontSize: 12),
-                  ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 12),
                   TextField(
                     controller: _manualUrlController,
                     decoration: const InputDecoration(
-                      hintText: 'http://localhost:53682/?code=...',
+                      hintText: 'http://localhost:8999/callback?code=...',
                       border: OutlineInputBorder(),
                       isDense: true,
                     ),
@@ -658,7 +734,7 @@ class _AddAccountDialogState extends State<AddAccountDialog> {
                       final input = _manualUrlController.text.trim();
                       if (input.isNotEmpty) {
                         final ok = OAuthHelper.submitManualCallback(input);
-                        if (!ok) {
+                        if (!ok && mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(content: Text('유효한 인증 코드를 찾을 수 없습니다.')),
                           );
