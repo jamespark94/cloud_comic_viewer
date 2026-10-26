@@ -20,6 +20,7 @@ import '../../services/viewer_settings_service.dart';
 import '../../services/zip_stream_reader.dart';
 import '../../utils/image_dimension_utils.dart';
 import '../../utils/manga_detection_utils.dart';
+import '../../utils/natural_sort_utils.dart';
 import '../widgets/comic_thumbnail_sheet.dart';
 import '../widgets/viewer_settings_dialog.dart';
 
@@ -27,6 +28,9 @@ class ComicViewerScreen extends StatefulWidget {
   final MediaItem item;
   final CloudService service;
   final List<MediaItem>? folderSiblings;
+  final List<MediaItem>? parentSiblings;
+  final String? parentFolderId;
+  final String? currentFolderName;
   final int? initialPage;
 
   const ComicViewerScreen({
@@ -34,6 +38,9 @@ class ComicViewerScreen extends StatefulWidget {
     required this.item,
     required this.service,
     this.folderSiblings,
+    this.parentSiblings,
+    this.parentFolderId,
+    this.currentFolderName,
     this.initialPage,
   });
 
@@ -61,26 +68,86 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
   final ItemPositionsListener _itemPositionsListener = ItemPositionsListener.create();
 
   // 이전/다음 권 이동을 위한 리스트
-  late final List<MediaItem> _viewableSiblings;
+  List<MediaItem> _viewableSiblings = [];
+  List<MediaItem> _siblingFolders = [];
   late MediaItem _currentItem;
+  bool _isFolderImageMode = false;
+  String? _currentParentFolderId;
+  String? _currentFolderName;
 
   @override
   void initState() {
     super.initState();
     _currentItem = widget.item;
+    _currentParentFolderId = widget.parentFolderId ?? widget.item.parentId;
+    _currentFolderName = widget.currentFolderName;
     _currentPageIndex = widget.initialPage ?? 0;
     _pageController = PageController(initialPage: _currentPageIndex);
 
-    // 같은 폴더 내 만화책/이미지 파일들 필터링
-    _viewableSiblings = (widget.folderSiblings ?? [])
-        .where((it) => it.isViewable && !it.isFolder)
-        .toList();
+    _isFolderImageMode = !_currentItem.isComicArchive && _currentItem.isImage;
+
+    // 만화책 압축 모드 vs 이미지 폴더 모드 형제 초기화
+    if (!_isFolderImageMode) {
+      _viewableSiblings = (widget.folderSiblings ?? [])
+          .where((it) => it.isViewable && !it.isFolder)
+          .toList();
+    } else {
+      if (widget.parentSiblings != null && widget.parentSiblings!.isNotEmpty) {
+        _siblingFolders = widget.parentSiblings!.where((it) => it.isFolder).toList();
+        _siblingFolders.sort((a, b) => NaturalSortUtils.compare(a.name, b.name));
+      } else {
+        _fetchParentSiblingFolders();
+      }
+    }
 
     _loadComic();
     _setupItemPositionsListener();
 
     // 전체화면 및 시스템 UI 모드 진입
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  }
+
+  Future<void> _fetchParentSiblingFolders() async {
+    try {
+      final parentId = _currentParentFolderId;
+      if (parentId == null || parentId.isEmpty) return;
+
+      if (widget.service.account.id == 'local') {
+        final parentDir = Directory(parentId);
+        final grandParent = parentDir.parent;
+        if (grandParent.existsSync()) {
+          final dirs = grandParent.listSync().whereType<Directory>().toList();
+          dirs.sort((a, b) => NaturalSortUtils.compare(
+                a.path.split(Platform.pathSeparator).last,
+                b.path.split(Platform.pathSeparator).last,
+              ));
+          if (mounted) {
+            setState(() {
+              _siblingFolders = dirs
+                  .map((d) => MediaItem(
+                        id: d.path,
+                        name: d.path.split(Platform.pathSeparator).last,
+                        parentId: grandParent.path,
+                        isFolder: true,
+                      ))
+                  .toList();
+            });
+          }
+        }
+      } else {
+        // 클라우드의 경우 상위 폴더 항목 조회
+        final siblings = await widget.service.listItems(folderId: parentId);
+        final folders = siblings.where((it) => it.isFolder).toList();
+        folders.sort((a, b) => NaturalSortUtils.compare(a.name, b.name));
+        if (mounted) {
+          setState(() {
+            _siblingFolders = folders;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('형제 폴더 로딩 실패: $e');
+    }
   }
 
   void _setupItemPositionsListener() {
@@ -124,12 +191,15 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
 
   void _saveReadingProgress() {
     if (_pages.isEmpty) return;
+    final saveId = _isFolderImageMode ? (_currentParentFolderId ?? _currentItem.parentId ?? _currentItem.id) : _currentItem.id;
+    final saveTitle = _isFolderImageMode ? (_currentFolderName ?? _currentItem.name) : _currentItem.name;
+
     ReadingHistoryService.instance.updateProgress(
-      id: _currentItem.id,
+      id: saveId,
       accountId: widget.service.account.id,
       accountName: widget.service.account.name,
       cloudType: widget.service.account.type,
-      title: _currentItem.name,
+      title: saveTitle,
       parentFolderId: _currentItem.parentId,
       pageIndex: _currentPageIndex,
       totalPages: _pages.length,
@@ -195,28 +265,54 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
           _isStreamed = false;
         }
       } else if (_currentItem.isImage) {
-        // 단일 이미지인 경우
-        if (widget.service.account.id == 'local') {
-          // 로컬인 경우 같은 폴더 내 이미지들을 모두 모아서 한 편의 만화로 구성
-          final parentPath = _currentItem.parentId;
-          if (parentPath != null && Directory(parentPath).existsSync()) {
-            loadedPages = await ComicArchiveService.extractPagesFromDirectory(Directory(parentPath));
-            final initialIdx = loadedPages.indexWhere((p) => p.name == _currentItem.name);
-            if (initialIdx >= 0) {
-              _currentPageIndex = initialIdx;
+        // 단일 이미지 또는 이미지 폴더인 경우
+        setState(() => _statusText = '폴더 내 이미지 페이지들을 준비하고 있습니다...');
+
+        List<MediaItem> imageSiblings = [];
+
+        // 1. folderSiblings에 이미지들이 이미 포함되어 있는지 확인
+        if (widget.folderSiblings != null && widget.folderSiblings!.isNotEmpty) {
+          imageSiblings = widget.folderSiblings!.where((it) => it.isImage && !it.isFolder).toList();
+        }
+
+        // 2. 만약 전달받은 목록에 없거나 단일 항목뿐인 경우 직접 폴더 목록 조회
+        if (imageSiblings.isEmpty || (imageSiblings.length == 1 && imageSiblings.first.id == _currentItem.id)) {
+          final parentId = _currentParentFolderId ?? _currentItem.parentId;
+          if (parentId != null && parentId.isNotEmpty) {
+            try {
+              final items = await widget.service.listItems(folderId: parentId);
+              imageSiblings = items.where((it) => it.isImage && !it.isFolder).toList();
+            } catch (e) {
+              debugPrint('폴더 이미지 목록 조회 실패: $e');
             }
-          } else {
-            loadedPages = [
-              ComicPage(
-                index: 0,
-                name: _currentItem.name,
-                filePath: _currentItem.id,
-                byteGetter: () => File(_currentItem.id).readAsBytes(),
-              ),
-            ];
+          }
+        }
+
+        // 파일 이름 기준 자연어 정렬 (Natural Sort Order)
+        imageSiblings.sort((a, b) => NaturalSortUtils.compare(a.name, b.name));
+
+        if (imageSiblings.isNotEmpty) {
+          // 로컬 여부에 따라 최적화된 ComicPage 빌드
+          final isLocal = widget.service.account.id == 'local';
+          loadedPages = List.generate(imageSiblings.length, (idx) {
+            final imgItem = imageSiblings[idx];
+            return ComicPage(
+              index: idx,
+              name: imgItem.name,
+              filePath: isLocal ? imgItem.id : null,
+              byteGetter: isLocal
+                  ? () => File(imgItem.id).readAsBytes()
+                  : () => widget.service.downloadBytes(imgItem),
+            );
+          });
+
+          // 최초 클릭했던 이미지 위치로 시작 페이지 인덱스 설정
+          final targetIdx = imageSiblings.indexWhere((it) => it.id == _currentItem.id || it.name == _currentItem.name);
+          if (targetIdx >= 0) {
+            _currentPageIndex = targetIdx;
           }
         } else {
-          // 클라우드 단일 이미지인 경우
+          // 이미지 형제가 없는 단일 이미지 폴백
           final bytes = await widget.service.downloadBytes(_currentItem);
           loadedPages = [
             ComicPage(
@@ -233,9 +329,13 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
       }
 
       if (mounted) {
-        // 저장된 이전 읽기 기록이 있다면 반영
-        final savedHistory = ReadingHistoryService.instance.getHistory(_currentItem.id);
-        int targetPage = widget.initialPage ?? savedHistory?.lastPage ?? 0;
+        // 저장된 이전 읽기 기록이 있다면 반영 (폴더 모드일 때는 폴더 ID 기준 확인)
+        final historyId = _isFolderImageMode ? (_currentParentFolderId ?? _currentItem.parentId ?? _currentItem.id) : _currentItem.id;
+        final savedHistory = ReadingHistoryService.instance.getHistory(historyId);
+        int targetPage = widget.initialPage ?? _currentPageIndex;
+        if (savedHistory != null && widget.initialPage == null && !_isFolderImageMode) {
+          targetPage = savedHistory.lastPage;
+        }
         if (targetPage >= loadedPages.length) {
           targetPage = loadedPages.length - 1;
         }
@@ -356,8 +456,77 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
     });
   }
 
+  bool get _hasPrevVolume {
+    if (_isFolderImageMode) {
+      if (_siblingFolders.isEmpty) return false;
+      final currentFolderId = _currentParentFolderId ?? _currentItem.parentId;
+      final idx = _siblingFolders.indexWhere((f) => f.id == currentFolderId || f.name == _currentFolderName);
+      return idx > 0;
+    }
+    return _viewableSiblings.isNotEmpty &&
+        _viewableSiblings.indexWhere((it) => it.id == _currentItem.id) > 0;
+  }
+
+  bool get _hasNextVolume {
+    if (_isFolderImageMode) {
+      if (_siblingFolders.isEmpty) return false;
+      final currentFolderId = _currentParentFolderId ?? _currentItem.parentId;
+      final idx = _siblingFolders.indexWhere((f) => f.id == currentFolderId || f.name == _currentFolderName);
+      return idx >= 0 && idx < _siblingFolders.length - 1;
+    }
+    return _viewableSiblings.isNotEmpty &&
+        _viewableSiblings.indexWhere((it) => it.id == _currentItem.id) < _viewableSiblings.length - 1;
+  }
+
   // 이전 권 / 다음 권 이동
-  void _switchVolume(int delta) {
+  Future<void> _switchVolume(int delta) async {
+    if (_isFolderImageMode) {
+      if (_siblingFolders.isEmpty) return;
+      final currentFolderId = _currentParentFolderId ?? _currentItem.parentId;
+      final currentIdx = _siblingFolders.indexWhere((f) => f.id == currentFolderId || f.name == _currentFolderName);
+      if (currentIdx == -1) return;
+
+      final targetIdx = currentIdx + delta;
+      if (targetIdx >= 0 && targetIdx < _siblingFolders.length) {
+        _saveReadingProgress();
+        final targetFolder = _siblingFolders[targetIdx];
+        _showModeToast('${targetFolder.name} 권으로 이동합니다...');
+
+        setState(() {
+          _isLoading = true;
+          _statusText = '\'${targetFolder.name}\' 폴더를 불러오는 중...';
+        });
+
+        try {
+          final items = await widget.service.listItems(folderId: targetFolder.id);
+          final imageItems = items.where((it) => it.isImage && !it.isFolder).toList();
+          imageItems.sort((a, b) => NaturalSortUtils.compare(a.name, b.name));
+
+          if (imageItems.isEmpty) {
+            throw Exception('\'${targetFolder.name}\' 폴더 내에 이미지 파일이 없습니다.');
+          }
+
+          if (mounted) {
+            setState(() {
+              _currentParentFolderId = targetFolder.id;
+              _currentFolderName = targetFolder.name;
+              _currentItem = delta > 0 ? imageItems.first : imageItems.last;
+              _currentPageIndex = delta > 0 ? 0 : imageItems.length - 1;
+            });
+            _loadComic();
+          }
+        } catch (e) {
+          if (mounted) {
+            setState(() {
+              _isLoading = false;
+              _errorMessage = e.toString();
+            });
+          }
+        }
+      }
+      return;
+    }
+
     if (_viewableSiblings.isEmpty) return;
     final currentIdx = _viewableSiblings.indexWhere((it) => it.id == _currentItem.id);
     if (currentIdx == -1) return;
@@ -490,6 +659,8 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
           duration: const Duration(milliseconds: 250),
           curve: Curves.easeOut,
         );
+      } else if (_currentPageIndex == 0 && _hasPrevVolume) {
+        _showSwitchVolumeDialog(isNext: false);
       }
     } else {
       if (_pageController.hasClients && _currentDisplayIndex > 0) {
@@ -497,6 +668,8 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
           duration: const Duration(milliseconds: 250),
           curve: Curves.easeOut,
         );
+      } else if (_currentDisplayIndex == 0 && _hasPrevVolume) {
+        _showSwitchVolumeDialog(isNext: false);
       }
     }
   }
@@ -511,6 +684,8 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
           duration: const Duration(milliseconds: 250),
           curve: Curves.easeOut,
         );
+      } else if (_currentPageIndex >= _pages.length - 1 && _hasNextVolume) {
+        _showSwitchVolumeDialog(isNext: true);
       }
     } else {
       final maxIdx = _displayItems.isNotEmpty ? _displayItems.length - 1 : _pages.length - 1;
@@ -519,8 +694,46 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
           duration: const Duration(milliseconds: 250),
           curve: Curves.easeOut,
         );
+      } else if (_currentDisplayIndex >= maxIdx && _hasNextVolume) {
+        _showSwitchVolumeDialog(isNext: true);
       }
     }
+  }
+
+  void _showSwitchVolumeDialog({required bool isNext}) {
+    final title = isNext ? '다음 권으로 이동할까요?' : '이전 권으로 이동할까요?';
+    String? targetName;
+    if (_isFolderImageMode) {
+      final currentFolderId = _currentParentFolderId ?? _currentItem.parentId;
+      final idx = _siblingFolders.indexWhere((f) => f.id == currentFolderId || f.name == _currentFolderName);
+      final targetIdx = idx + (isNext ? 1 : -1);
+      if (targetIdx >= 0 && targetIdx < _siblingFolders.length) {
+        targetName = _siblingFolders[targetIdx].name;
+      }
+    } else {
+      final idx = _viewableSiblings.indexWhere((it) => it.id == _currentItem.id);
+      final targetIdx = idx + (isNext ? 1 : -1);
+      if (targetIdx >= 0 && targetIdx < _viewableSiblings.length) {
+        targetName = _viewableSiblings[targetIdx].name;
+      }
+    }
+
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          targetName != null ? '$title ($targetName)' : title,
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        action: SnackBarAction(
+          label: '이동',
+          textColor: Colors.yellowAccent,
+          onPressed: () => _switchVolume(isNext ? 1 : -1),
+        ),
+        duration: const Duration(seconds: 4),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   void _handleViewerTap(TapUpDetails details, ViewerSettings settings, BoxConstraints constraints) {
@@ -913,7 +1126,11 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
                   children: [
                     Flexible(
                       child: Text(
-                        _currentItem.name,
+                        _isFolderImageMode
+                            ? (_currentFolderName != null
+                                ? '$_currentFolderName (${_currentItem.name})'
+                                : _currentItem.name)
+                            : _currentItem.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
@@ -1017,10 +1234,8 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
 
   Widget _buildBottomBar(ViewerSettingsService settingsService) {
     final currentSettings = settingsService.settings;
-    final hasPrevVol = _viewableSiblings.isNotEmpty &&
-        _viewableSiblings.indexWhere((it) => it.id == _currentItem.id) > 0;
-    final hasNextVol = _viewableSiblings.isNotEmpty &&
-        _viewableSiblings.indexWhere((it) => it.id == _currentItem.id) < _viewableSiblings.length - 1;
+    final hasPrevVol = _hasPrevVolume;
+    final hasNextVol = _hasNextVolume;
 
     return Container(
       decoration: const BoxDecoration(

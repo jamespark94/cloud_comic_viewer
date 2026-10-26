@@ -239,6 +239,11 @@ class _BrowserScreenState extends State<BrowserScreen> {
       return;
     }
 
+    String? parentFolderId;
+    if (_folderStack.length > 1) {
+      parentFolderId = _folderStack[_folderStack.length - 2].key;
+    }
+
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -246,6 +251,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
           item: item,
           service: widget.service,
           folderSiblings: _allItems,
+          parentFolderId: parentFolderId,
+          currentFolderName: _folderStack.isNotEmpty ? _folderStack.last.value : null,
         ),
       ),
     ).then((_) {

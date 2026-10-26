@@ -79,6 +79,30 @@ class MediaItem {
         'modifiedTime': modifiedTime?.toIso8601String(),
       };
 
+  MediaItem copyWith({
+    String? id,
+    String? name,
+    String? parentId,
+    bool? isFolder,
+    int? size,
+    String? mimeType,
+    String? thumbnailUrl,
+    String? directStreamUrl,
+    DateTime? modifiedTime,
+  }) {
+    return MediaItem(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      parentId: parentId ?? this.parentId,
+      isFolder: isFolder ?? this.isFolder,
+      size: size ?? this.size,
+      mimeType: mimeType ?? this.mimeType,
+      thumbnailUrl: thumbnailUrl ?? this.thumbnailUrl,
+      directStreamUrl: directStreamUrl ?? this.directStreamUrl,
+      modifiedTime: modifiedTime ?? this.modifiedTime,
+    );
+  }
+
   factory MediaItem.fromJson(Map<String, dynamic> json) => MediaItem(
         id: json['id'] as String,
         name: json['name'] as String,
