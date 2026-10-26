@@ -43,7 +43,7 @@ class CloudHistorySyncService extends ChangeNotifier {
   Future<bool> syncHistories(AccountManager accountManager, {bool silent = false}) async {
     if (_isSyncing) return false;
 
-    final cloudAccounts = accountManager.accounts.where((a) => a.type != CloudType.local).toList();
+    final cloudAccounts = accountManager.accounts.where((a) => a.type != CloudType.local && a.type != CloudType.terabox).toList();
     if (cloudAccounts.isEmpty) {
       _lastSyncMessage = '동기화할 클라우드 계정이 연결되어 있지 않습니다.';
       notifyListeners();

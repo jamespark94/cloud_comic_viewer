@@ -1,4 +1,4 @@
-import 'dart:io';
+﻿import 'dart:io';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:path_provider/path_provider.dart';
@@ -51,7 +51,7 @@ class ComicCacheManager {
 
     // 2. 캐시 디스크 확인
     final cached = await getCachedFile(service.account.id, item);
-    if (cached != null) {
+    if (cached != null && (await cached.length()) > 500) {
       final bytes = await cached.readAsBytes();
       if (onProgress != null) {
         onProgress(bytes.length, bytes.length);

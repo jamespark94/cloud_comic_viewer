@@ -846,14 +846,16 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Expanded(
-          child: Center(
+          child: Align(
+            alignment: Alignment.centerRight,
             child: _buildSinglePageImage(leftPage, settings, leftPage.index),
           ),
         ),
         if (rightPage != null) ...[
           Container(width: 1, color: Colors.black38),
           Expanded(
-            child: Center(
+            child: Align(
+              alignment: Alignment.centerLeft,
               child: _buildSinglePageImage(rightPage, settings, rightPage.index),
             ),
           ),
