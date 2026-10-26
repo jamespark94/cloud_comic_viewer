@@ -1299,6 +1299,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return (Icons.dns, Colors.greenAccent);
       case CloudType.terabox:
         return (Icons.cloud_circle_outlined, Colors.cyanAccent);
+      case CloudType.baidu:
+        return (Icons.cloud_done_outlined, Colors.blueAccent);
     }
   }
 
