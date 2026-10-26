@@ -340,6 +340,14 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
           targetPage = loadedPages.length - 1;
         }
 
+        // 첫 시작 페이지의 이미지 규격을 미리 확보하여
+        // 첫 화면부터 와이드 이미지 분할(나눠보기)이 즉시 올바르게 적용되도록 보장
+        if (loadedPages.isNotEmpty && targetPage >= 0 && targetPage < loadedPages.length) {
+          try {
+            await loadedPages[targetPage].getBytes();
+          } catch (_) {}
+        }
+
         setState(() {
           _pages = loadedPages;
           _currentPageIndex = targetPage;
@@ -573,7 +581,7 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
             direction: settings.readingDirection,
             orientation: orientation,
           );
-          if (_displayItems.length != newItems.length) {
+          if (!DisplayPageBuilder.itemsEqual(_displayItems, newItems)) {
             _displayItems = newItems;
             final targetDisplay = DisplayPageBuilder.findDisplayIndex(_displayItems, _currentPageIndex);
             _currentDisplayIndex = targetDisplay;
@@ -957,6 +965,12 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
             if (snapshot.hasData) {
               final bytes = snapshot.data!;
               final dims = page.dimensions ?? ImageDimensionUtils.parse(bytes);
+              if (page.dimensions == null && dims != null) {
+                page.updateDimensions(dims);
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) setState(() {});
+                });
+              }
 
               if (dims != null && dims.width > 0 && dims.height > 0) {
                 final displaySize = ImageDimensionUtils.calculateDisplaySize(

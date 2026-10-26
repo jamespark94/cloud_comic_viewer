@@ -29,6 +29,18 @@ class DisplayPageItem {
   /// 두 장 합쳐보기(spread)일 때 좌/우 페이지 지정 (읽기 방향 반영)
   ComicPage get leftPage => primaryPage;
   ComicPage? get rightPage => secondaryPage;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DisplayPageItem &&
+          runtimeType == other.runtimeType &&
+          type == other.type &&
+          primaryOriginalIndex == other.primaryOriginalIndex &&
+          secondaryOriginalIndex == other.secondaryOriginalIndex;
+
+  @override
+  int get hashCode => Object.hash(type, primaryOriginalIndex, secondaryOriginalIndex);
 }
 
 class DisplayPageBuilder {
@@ -236,6 +248,16 @@ class DisplayPageBuilder {
       }
     }
     return items;
+  }
+
+  /// 두 DisplayPageItem 목록의 구성(타입 및 원본 인덱스)이 같은지 비교합니다.
+  static bool itemsEqual(List<DisplayPageItem> a, List<DisplayPageItem> b) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   /// 원본 페이지 인덱스에 해당하는 displayItems의 인덱스를 반환합니다.
