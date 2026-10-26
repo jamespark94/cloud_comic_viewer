@@ -1,4 +1,4 @@
-import 'dart:convert';
+﻿import 'dart:convert';
 
 enum CloudType {
   googleDrive,
@@ -9,6 +9,7 @@ enum CloudType {
   local,
   terabox,
   baidu,
+  naver,
 }
 
 class CloudAccount {

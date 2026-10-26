@@ -1301,6 +1301,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return (Icons.cloud_circle_outlined, Colors.cyanAccent);
       case CloudType.baidu:
         return (Icons.cloud_done_outlined, Colors.blueAccent);
+      case CloudType.naver:
+        return (Icons.cloud_queue_rounded, Colors.greenAccent);
     }
   }
 

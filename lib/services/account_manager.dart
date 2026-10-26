@@ -1,3 +1,4 @@
+import 'naver_storage_provider.dart';
 import 'baidu_service.dart';
 import 'terabox_service.dart';
 import 'package:flutter/foundation.dart';
@@ -115,6 +116,8 @@ class AccountManager extends ChangeNotifier {
         return TeraBoxService(account, onAccountUpdated: saveAccount);
       case CloudType.baidu:
         return BaiduService(account, onAccountUpdated: saveAccount);
+      case CloudType.naver:
+        return NaverStorageProvider(account, onAccountUpdated: saveAccount);
     }
   }
 }
