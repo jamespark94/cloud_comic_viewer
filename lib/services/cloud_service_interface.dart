@@ -15,6 +15,9 @@ abstract class CloudService {
   /// 파일 스트리밍 또는 직접 다운로드를 위한 접근 URL을 반환합니다.
   Future<String> getStreamUrl(MediaItem item);
 
+  /// 캐시된 스트리밍/다운로드 URL이 만료되었거나 무효화되어야 할 때 호출합니다.
+  void invalidateStreamUrl(MediaItem item) {}
+
   /// 스트리밍/다운로드 요청 시 필요한 인증 헤더 (예: Authorization Bearer)
   Future<Map<String, String>> getStreamHeaders();
 
@@ -29,6 +32,14 @@ abstract class CloudService {
     MediaItem item, {
     void Function(int received, int total)? onProgress,
   }) async {
+    return _downloadBytesInternal(item, onProgress: onProgress, isRetry: false);
+  }
+
+  Future<Uint8List> _downloadBytesInternal(
+    MediaItem item, {
+    void Function(int received, int total)? onProgress,
+    bool isRetry = false,
+  }) async {
     await refreshTokensIfNeeded();
     final url = await getStreamUrl(item);
     final headers = await getStreamHeaders();
@@ -38,6 +49,15 @@ abstract class CloudService {
 
     final streamedResponse = await request.send();
     if (streamedResponse.statusCode != 200) {
+      // 403 Forbidden 또는 401 Unauthorized인 경우 임시 서명 URL이 만료/소진되었을 수 있으므로
+      // 캐시를 무효화하고 1회 재발급 후 재시도합니다.
+      if (!isRetry && (streamedResponse.statusCode == 403 || streamedResponse.statusCode == 401)) {
+        try {
+          await streamedResponse.stream.drain().catchError((_) {});
+        } catch (_) {}
+        invalidateStreamUrl(item);
+        return _downloadBytesInternal(item, onProgress: onProgress, isRetry: true);
+      }
       throw Exception('파일 다운로드 실패 (${streamedResponse.statusCode})');
     }
 

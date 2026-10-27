@@ -1,6 +1,4 @@
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
-import '../models/cloud_account.dart';
 import '../models/media_item.dart';
 import 'cloud_service_interface.dart';
 import 'naver_box_api_client.dart';
@@ -67,6 +65,7 @@ abstract class CloudStorageProvider {
 
 class NaverStorageProvider extends CloudService implements CloudStorageProvider {
   late final NaverBoxApiClient _apiClient;
+  final Map<String, ({String url, DateTime expiry})> _streamUrlCache = {};
 
   NaverStorageProvider(
     super.account, {
@@ -88,7 +87,12 @@ class NaverStorageProvider extends CloudService implements CloudStorageProvider 
 
   @override
   Future<Map<String, String>> getStreamHeaders() async {
-    return _apiClient.authHeaders;
+    // 네이버 MYBOX 다운로드 URL(downloadUrl)은 URL 쿼리 파라미터(atoken, resourceKey 등)로
+    // 1회용 인증이 서명되어 있으므로, 다운로드/스트리밍 요청 시 Authorization 헤더나
+    // 임의의 Referer/Origin을 붙이면 CDN/스토리지 서버에서 403 Forbidden을 반환합니다.
+    return {
+      'User-Agent': NaverBoxApiClient.defaultUserAgent,
+    };
   }
 
   @override
@@ -124,7 +128,27 @@ class NaverStorageProvider extends CloudService implements CloudStorageProvider 
   }
 
   @override
+  void invalidateStreamUrl(MediaItem item) {
+    _streamUrlCache.remove(item.id);
+  }
+
+  @override
   Future<String> getStreamUrl(MediaItem item) async {
-    return getDownloadUrl(item.id);
+    final cached = _streamUrlCache[item.id];
+    if (cached != null && DateTime.now().isBefore(cached.expiry)) {
+      return cached.url;
+    }
+
+    // 네이버 MYBOX 다운로드 URL 발급 API (/v1/drive/files/{fileId}/download)
+    // 반환된 downloadUrl은 이미 스토리지 서명(atoken, auth=3 등)이 포함된 직링크입니다.
+    final rawDownloadUrl = await getDownloadUrl(item.id);
+
+    // 네이버 임시 서명 URL은 10분(600초) 유효하므로 안전하게 8분 캐싱
+    _streamUrlCache[item.id] = (
+      url: rawDownloadUrl,
+      expiry: DateTime.now().add(const Duration(minutes: 8)),
+    );
+
+    return rawDownloadUrl;
   }
 }

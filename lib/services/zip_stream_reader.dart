@@ -72,8 +72,11 @@ class HttpCloudRangeReader implements RangeByteReader {
 
   HttpCloudRangeReader(this.service, this.item);
 
-  Future<void> _initUrlAndHeaders() async {
-    if (_streamUrl == null) {
+  Future<void> _initUrlAndHeaders({bool forceRefresh = false}) async {
+    if (_streamUrl == null || forceRefresh) {
+      if (forceRefresh) {
+        service.invalidateStreamUrl(item);
+      }
       await service.refreshTokensIfNeeded();
       _streamUrl = await service.getStreamUrl(item);
       _headers = await service.getStreamHeaders();
@@ -83,6 +86,7 @@ class HttpCloudRangeReader implements RangeByteReader {
   @override
   Future<int> getTotalLength() async {
     if (_totalLength != null && _totalLength! > 0) return _totalLength!;
+    // 1. 파일 메타데이터의 size가 유효하면 네트워크 요청 없이 바로 사용
     if (item.size != null && item.size! > 0) {
       _totalLength = item.size;
       return _totalLength!;
@@ -90,17 +94,29 @@ class HttpCloudRangeReader implements RangeByteReader {
 
     await _initUrlAndHeaders();
     // 0-0 range 요청으로 Content-Range 헤더에서 전체 길이 파악
-    final req = http.Request('GET', Uri.parse(_streamUrl!));
+    var req = http.Request('GET', Uri.parse(_streamUrl!));
     req.headers.addAll(_headers ?? {});
     req.headers['Range'] = 'bytes=0-0';
 
-    final res = await _client.send(req);
+    var res = await _client.send(req);
+    // 403 또는 401이면 URL 갱신 후 1회 재시도
+    if (res.statusCode == 403 || res.statusCode == 401) {
+      await res.stream.drain().catchError((_) {});
+      await _initUrlAndHeaders(forceRefresh: true);
+      req = http.Request('GET', Uri.parse(_streamUrl!));
+      req.headers.addAll(_headers ?? {});
+      req.headers['Range'] = 'bytes=0-0';
+      res = await _client.send(req);
+    }
+
     final contentRange = res.headers['content-range'];
     if (contentRange != null) {
       // Content-Range: bytes 0-0/1234567
       final match = RegExp(r'/(\d+)').firstMatch(contentRange);
       if (match != null) {
         _totalLength = int.parse(match.group(1)!);
+        // 혹시 200 OK 등으로 전체 스트림이 오고 있을 가능성 방지: 스트림 닫기
+        await res.stream.drain().catchError((_) {});
         return _totalLength!;
       }
     }
@@ -108,26 +124,62 @@ class HttpCloudRangeReader implements RangeByteReader {
     final cl = res.headers['content-length'];
     if (cl != null) {
       _totalLength = int.tryParse(cl);
-      if (_totalLength != null) return _totalLength!;
+      if (_totalLength != null) {
+        await res.stream.drain().catchError((_) {});
+        return _totalLength!;
+      }
     }
 
+    await res.stream.drain().catchError((_) {});
     throw Exception('파일 전체 크기를 확인할 수 없습니다.');
   }
 
   @override
   Future<Uint8List> readRange(int start, int end) async {
+    return _readRangeInternal(start, end, isRetry: false);
+  }
+
+  Future<Uint8List> _readRangeInternal(int start, int end, {bool isRetry = false}) async {
+    if (start < 0 || end < start) {
+      throw ArgumentError('유효하지 않은 Range 범위입니다: $start-$end');
+    }
+
     await _initUrlAndHeaders();
     final req = http.Request('GET', Uri.parse(_streamUrl!));
     req.headers.addAll(_headers ?? {});
+    // bytes={start}-{end} 형태의 명시적 절대 범위 설정
     req.headers['Range'] = 'bytes=$start-$end';
 
     final streamedRes = await _client.send(req);
     if (streamedRes.statusCode == 206) {
       final bytes = await streamedRes.stream.toBytes();
       return bytes;
-    } else if (streamedRes.statusCode == 200 && start == 0 && end >= (streamedRes.contentLength ?? 0) - 1) {
-      return await streamedRes.stream.toBytes();
+    } else if (streamedRes.statusCode == 200) {
+      // 200 OK 수신 시 스트림을 즉시 중단(Abort)하여 전체 파일 다운로드 방지
+      // 작은 파일(start == 0 && end >= contentLength - 1)인 경우에만 허용
+      final cl = streamedRes.contentLength ?? 0;
+      if (start == 0 && cl > 0 && end >= cl - 1) {
+        return await streamedRes.stream.toBytes();
+      } else {
+        // Range를 무시하고 전체 200 OK를 내려주는 경우: 즉각 취소(drain/cancel) 및 에러
+        try {
+          await streamedRes.stream.drain().catchError((_) {});
+        } catch (_) {}
+        throw Exception(
+          'HTTP Range 미지원 서버 감지 (200 OK 수신). 전체 다운로드를 방지하기 위해 스트림을 즉시 중단했습니다. (요청: bytes=$start-$end, 파일크기: $cl)',
+        );
+      }
+    } else if (!isRetry && (streamedRes.statusCode == 403 || streamedRes.statusCode == 401)) {
+      // 403/401 발생 시 토큰 만료/1회용 URL 소진 가능성이 있으므로 URL을 갱신하여 1회 재시도
+      try {
+        await streamedRes.stream.drain().catchError((_) {});
+      } catch (_) {}
+      await _initUrlAndHeaders(forceRefresh: true);
+      return _readRangeInternal(start, end, isRetry: true);
     } else {
+      try {
+        await streamedRes.stream.drain().catchError((_) {});
+      } catch (_) {}
       throw Exception('Range 요청 실패: HTTP ${streamedRes.statusCode}');
     }
   }
@@ -246,6 +298,7 @@ class ZipStreamReader {
 
       return pages;
     } catch (e) {
+      service.invalidateStreamUrl(item);
       reader.close();
       rethrow;
     }

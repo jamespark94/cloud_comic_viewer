@@ -238,6 +238,7 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
             _isStreamed = true;
           }
         } catch (streamErr) {
+          widget.service.invalidateStreamUrl(_currentItem);
           debugPrint('스트리밍 파싱 실패, 전체 다운로드 폴백: $streamErr');
         }
 
