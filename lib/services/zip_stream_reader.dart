@@ -6,9 +6,11 @@ import 'package:archive/archive.dart';
 import 'package:http/http.dart' as http;
 import '../models/comic_page.dart';
 import '../models/media_item.dart';
+import '../utils/mega_crypto_utils.dart';
 import '../utils/natural_sort_utils.dart';
 import 'cloud_service_interface.dart';
 import 'comic_archive_service.dart';
+import 'mega_storage_provider.dart';
 
 class ZipEntryMeta {
   final String name;
@@ -190,15 +192,81 @@ class HttpCloudRangeReader implements RangeByteReader {
   }
 }
 
+class MegaCloudRangeReader implements RangeByteReader {
+  final MegaStorageProvider provider;
+  final MediaItem item;
+  final HttpCloudRangeReader _underlyingReader;
+  MegaFileKey? _fileKey;
+
+  MegaCloudRangeReader(this.provider, this.item)
+      : _underlyingReader = HttpCloudRangeReader(provider, item);
+
+  Future<MegaFileKey> _ensureKey() async {
+    if (_fileKey != null) return _fileKey!;
+    final key = await provider.getFileKey(item.id);
+    if (key == null) {
+      throw Exception('MEGA 파일의 복호화 키를 찾을 수 없습니다: ${item.id}');
+    }
+    _fileKey = key;
+    return _fileKey!;
+  }
+
+  @override
+  Future<int> getTotalLength() async {
+    return _underlyingReader.getTotalLength();
+  }
+
+  @override
+  Future<Uint8List> readRange(int start, int end) async {
+    if (start < 0 || end < start) {
+      throw ArgumentError('유효하지 않은 Range 범위입니다: $start-$end');
+    }
+
+    final key = await _ensureKey();
+
+    // AES-128-CTR 블록(16바이트) 정렬:
+    // start를 포함하는 16바이트 블록 인덱스 및 오프셋 계산
+    final blockOffset = start ~/ 16;
+    final alignedStart = blockOffset * 16;
+    final skipLeading = start - alignedStart;
+
+    // alignedStart부터 end까지의 암호화된 바이트 Range 요청
+    final encryptedChunk = await _underlyingReader.readRange(alignedStart, end);
+
+    // initialBlockOffset = blockOffset으로 CTR 복호화
+    final decryptedChunk = MegaCryptoUtils.decryptFileBytesCtr(
+      encryptedBytes: encryptedChunk,
+      fileAesKey16: key.aesKey,
+      fileIv8: key.iv,
+      initialBlockOffset: blockOffset,
+    );
+
+    if (skipLeading > 0) {
+      return decryptedChunk.sublist(skipLeading);
+    }
+    return decryptedChunk;
+  }
+
+  @override
+  void close() {
+    _underlyingReader.close();
+  }
+}
+
 class ZipStreamReader {
   /// Range 요청을 통해 ZIP 파일 전체를 다운로드하지 않고 목차 및 페이지 목록을 즉시 파싱합니다.
   static Future<List<ComicPage>> extractPagesStreamed({
     required CloudService service,
     required MediaItem item,
   }) async {
-    final RangeByteReader reader = service.account.id == 'local'
-        ? LocalFileRangeReader(File(item.id))
-        : HttpCloudRangeReader(service, item);
+    final RangeByteReader reader;
+    if (service.account.id == 'local') {
+      reader = LocalFileRangeReader(File(item.id));
+    } else if (service is MegaStorageProvider) {
+      reader = MegaCloudRangeReader(service, item);
+    } else {
+      reader = HttpCloudRangeReader(service, item);
+    }
 
     try {
       final totalLength = await reader.getTotalLength();

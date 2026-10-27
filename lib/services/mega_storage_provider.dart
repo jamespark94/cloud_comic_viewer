@@ -180,6 +180,13 @@ class MegaStorageProvider extends CloudService implements CloudStorageProvider {
     return files.map((f) => f.toMediaItem()).toList();
   }
 
+  /// 파일의 복호화 키(MegaFileKey) 조회
+  Future<MegaFileKey?> getFileKey(String fileId) async {
+    final client = await _ensureClient();
+    final node = await client.getNodeById(fileId);
+    return node?.decryptedKey;
+  }
+
   @override
   Future<String> getStreamUrl(MediaItem item) async {
     // MEGA 파일은 암호화된 스트림이므로 전체 다운로드 및 복호화(downloadBytes)를 우선 유도
