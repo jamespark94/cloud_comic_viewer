@@ -1,3 +1,5 @@
+import 'mega_storage_provider.dart';
+import 'mega_api_client.dart';
 import 'naver_storage_provider.dart';
 import 'baidu_service.dart';
 import 'terabox_service.dart';
@@ -88,6 +90,7 @@ class AccountManager extends ChangeNotifier {
   }
 
   Future<void> removeAccount(String id) async {
+    await MegaAuthManager.deleteCredentials(id);
     _accounts.removeWhere((a) => a.id == id);
     await _persist();
     notifyListeners();
@@ -118,6 +121,8 @@ class AccountManager extends ChangeNotifier {
         return BaiduService(account, onAccountUpdated: saveAccount);
       case CloudType.naver:
         return NaverStorageProvider(account, onAccountUpdated: saveAccount);
+      case CloudType.mega:
+        return MegaStorageProvider(account, onAccountUpdated: saveAccount);
     }
   }
 }
