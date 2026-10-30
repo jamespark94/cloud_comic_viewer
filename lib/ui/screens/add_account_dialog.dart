@@ -14,10 +14,12 @@ import '../../models/cloud_account.dart';
 import '../../services/account_manager.dart';
 import '../../services/box_service.dart';
 import '../../services/dropbox_service.dart';
+import '../../services/google_auth_manager.dart';
 import '../../services/google_drive_service.dart';
 import '../../services/oauth_helper.dart';
 import '../../services/onedrive_service.dart';
 import '../../utils/battery_utils.dart';
+import '../../widgets/google_login_button.dart';
 
 class AddAccountDialog extends StatefulWidget {
   const AddAccountDialog({super.key});
@@ -70,7 +72,8 @@ class _AddAccountDialogState extends State<AddAccountDialog> with WidgetsBinding
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && _isLoading) {
+    // 사용자가 명시적으로 수동 입력창을 보고 있을 때만 클립보드 검사 허용 (자동 가로채기 방지)
+    if (state == AppLifecycleState.resumed && _isLoading && _showManualInput) {
       _checkClipboardForAuthCode();
     }
   }
@@ -139,6 +142,14 @@ class _AddAccountDialogState extends State<AddAccountDialog> with WidgetsBinding
   Future<void> _startOAuth() async {
     if (_selectedType == null) return;
 
+    // 새 인증 시작 시 이전 클립보드의 만료된 code 파라미터 간섭 방지
+    try {
+      final clip = await Clipboard.getData(Clipboard.kTextPlain);
+      if (clip?.text != null && (clip!.text!.contains('code=') || clip.text!.contains('localhost:8999'))) {
+        await Clipboard.setData(const ClipboardData(text: ''));
+      }
+    } catch (_) {}
+
     _manualRevealTimer?.cancel();
     _manualRevealTimer = Timer(const Duration(seconds: 1), () {
       if (mounted && _isLoading && !_showManualInput) {
@@ -162,6 +173,19 @@ class _AddAccountDialogState extends State<AddAccountDialog> with WidgetsBinding
     });
 
     try {
+      // 안드로이드 기기에서 백그라운드 루프백 서버 동결(FreecessController) 방지를 위해 배터리 예외 확인
+      if (Platform.isAndroid &&
+          (_selectedType == CloudType.googleDrive ||
+              _selectedType == CloudType.oneDrive ||
+              _selectedType == CloudType.box ||
+              _selectedType == CloudType.dropbox)) {
+        final isIgnoring = await BatteryUtils.isIgnoringBatteryOptimizations();
+        if (!isIgnoring) {
+          await BatteryUtils.requestIgnoreBatteryOptimizations();
+          await Future.delayed(const Duration(milliseconds: 500));
+        }
+      }
+
       if (_selectedType == CloudType.googleDrive) {
         await _authenticateGoogle();
       } else if (_selectedType == CloudType.oneDrive) {
@@ -199,9 +223,12 @@ class _AddAccountDialogState extends State<AddAccountDialog> with WidgetsBinding
     final clientId = _clientIdController.text.trim().isNotEmpty
         ? _clientIdController.text.trim()
         : GoogleDriveService.defaultClientId;
+    // 기본 Client Secret은 기본 Client ID와 짝일 때만 사용 (불일치 시 401 invalid_client)
     final clientSecret = _clientSecretController.text.trim().isNotEmpty
         ? _clientSecretController.text.trim()
-        : GoogleDriveService.defaultClientSecret;
+        : (clientId == GoogleDriveService.defaultClientId
+            ? GoogleDriveService.defaultClientSecret
+            : null);
 
     final codeVerifier = OAuthHelper.generateRandomString();
     final codeChallenge = OAuthHelper.generateCodeChallenge(codeVerifier);
@@ -1585,15 +1612,58 @@ class _AddAccountDialogState extends State<AddAccountDialog> with WidgetsBinding
             ],
 
             const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              height: 46,
-              child: ElevatedButton.icon(
-                onPressed: _startOAuth,
-                icon: const Icon(Icons.open_in_browser),
-                label: const Text('브라우저 열어 로그인 및 연결', style: TextStyle(fontWeight: FontWeight.bold)),
+            if (type == CloudType.googleDrive && (Platform.isAndroid || Platform.isIOS)) ...[
+              SizedBox(
+                width: double.infinity,
+                child: GoogleLoginButton(
+                  label: 'Google 계정으로 원터치 연결',
+                  onSuccess: (googleAccount) async {
+                    final navigator = Navigator.of(context);
+                    final accountMgr = context.read<AccountManager>();
+                    final token = await GoogleAuthManager().getAccessToken() ?? '';
+                    final account = CloudAccount(
+                      id: 'gdrive_${googleAccount.id}',
+                      name: 'Google Drive (${googleAccount.displayName ?? googleAccount.email})',
+                      type: CloudType.googleDrive,
+                      email: googleAccount.email,
+                      accessToken: token,
+                      refreshToken: 'google_sign_in',
+                      tokenExpiry: DateTime.now().add(const Duration(minutes: 55)),
+                    );
+                    await accountMgr.saveAccount(account);
+                    if (mounted) {
+                      navigator.pop(true);
+                    }
+                  },
+                  onError: (err) {
+                    final errStr = err.toString();
+                    debugPrint('[AddAccountDialog] GoogleLoginButton error: $errStr');
+                    // 에러 발생 시 사용자가 직접 인앱 브라우저 버튼을 누를 수 있도록 자동 전환(_startOAuth)을 방지하여
+                    // PKCE code_verifier 및 루프백 세션 오염을 방지합니다.
+                  },
+                ),
               ),
-            ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                height: 44,
+                child: OutlinedButton.icon(
+                  onPressed: _startOAuth,
+                  icon: const Icon(Icons.open_in_browser, size: 18),
+                  label: const Text('인앱 브라우저로 로그인 및 연결'),
+                ),
+              ),
+            ] else ...[
+              SizedBox(
+                width: double.infinity,
+                height: 46,
+                child: ElevatedButton.icon(
+                  onPressed: _startOAuth,
+                  icon: const Icon(Icons.open_in_browser),
+                  label: const Text('브라우저 열어 로그인 및 연결', style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ],
           ],
         ],
       ],

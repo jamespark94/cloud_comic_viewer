@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 import 'services/account_manager.dart';
 import 'services/folder_shortcut_manager.dart';
+import 'services/google_auth_manager.dart';
 import 'services/reading_history_service.dart';
 import 'services/viewer_settings_service.dart';
 import 'ui/screens/home_screen.dart';
@@ -19,7 +21,10 @@ void main() async {
   // 1. 플랫폼 감지 초기화
   await PlatformUtils.initialize();
 
-  // 2. 만화책 독서 기록 및 뷰어 환경설정 불러오기
+  // 2. Google Sign-In 이전 로그인 세션 비차단 무음 복구
+  unawaited(GoogleAuthManager().initialize());
+
+  // 3. 만화책 독서 기록 및 뷰어 환경설정 불러오기
   await ReadingHistoryService.instance.loadHistories();
   await ViewerSettingsService.instance.loadSettings();
 

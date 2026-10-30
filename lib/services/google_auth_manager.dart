@@ -12,8 +12,17 @@ class GoogleAuthManager {
   static const String driveReadonlyScope =
       'https://www.googleapis.com/auth/drive.readonly';
 
+  /// Google Drive 앱 생성 파일(독서기록 동기화 JSON) 읽기/쓰기 스코프
+  static const String driveFileScope =
+      'https://www.googleapis.com/auth/drive.file';
+
+  static const List<String> requiredScopes = <String>[
+    driveReadonlyScope,
+    driveFileScope,
+  ];
+
   final GoogleSignIn _googleSignIn = GoogleSignIn(
-    scopes: <String>[driveReadonlyScope],
+    scopes: requiredScopes,
   );
 
   GoogleSignInAccount? _currentUser;
@@ -58,14 +67,18 @@ class GoogleAuthManager {
       }
 
       // 필수 스코프 부여 여부 검증 및 요청
-      final hasScope = await _googleSignIn.canAccessScopes([driveReadonlyScope]);
-      if (!hasScope) {
-        final granted = await _googleSignIn.requestScopes([driveReadonlyScope]);
-        if (!granted) {
-          debugPrint('[GoogleAuthManager] Scope $driveReadonlyScope was denied.');
-          await signOut();
-          throw Exception('Google Drive 읽기 권한이 거부되었습니다.');
+      try {
+        final hasScope = await _googleSignIn.canAccessScopes(requiredScopes);
+        if (!hasScope) {
+          final granted = await _googleSignIn.requestScopes(requiredScopes);
+          if (!granted) {
+            debugPrint('[GoogleAuthManager] Scope $requiredScopes was denied.');
+            await signOut();
+            throw Exception('Google Drive 접근 권한이 거부되었습니다.');
+          }
         }
+      } catch (scopeError) {
+        debugPrint('[GoogleAuthManager] Scope check note: $scopeError');
       }
 
       _currentUser = account;
@@ -87,6 +100,18 @@ class GoogleAuthManager {
       debugPrint('[GoogleAuthManager] signInSilently failed: $e');
       return null;
     }
+  }
+
+  /// 최신 액세스 토큰 문자열 반환 (실패 시 null)
+  Future<String?> getAccessToken() async {
+    try {
+      final headers = await getAuthHeaders();
+      final auth = headers['Authorization'];
+      if (auth != null && auth.startsWith('Bearer ')) {
+        return auth.substring(7).trim();
+      }
+    } catch (_) {}
+    return null;
   }
 
   /// 최신 인증 헤더 반환 (`{'Authorization': 'Bearer <token>'}`)
