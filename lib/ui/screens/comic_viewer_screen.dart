@@ -66,6 +66,22 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
   late final PageController _pageController;
   final ItemScrollController _itemScrollController = ItemScrollController();
   final ItemPositionsListener _itemPositionsListener = ItemPositionsListener.create();
+  final Map<int, TransformationController> _zoomControllers = {};
+  TapDownDetails? _doubleTapDetails;
+  bool _isZoomed = false;
+  final Set<int> _activePointers = {};
+
+  TransformationController _getControllerFor(int index) {
+    return _zoomControllers.putIfAbsent(index, () {
+      final c = TransformationController();
+      c.addListener(() {
+        if (!mounted || index != _currentDisplayIndex) return;
+        final z = c.value.getMaxScaleOnAxis() > 1.05;
+        if (_isZoomed != z) setState(() => _isZoomed = z);
+      });
+      return c;
+    });
+  }
 
   // 이전/다음 권 이동을 위한 리스트
   List<MediaItem> _viewableSiblings = [];
@@ -171,6 +187,10 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
     _toastTimer?.cancel();
     _saveReadingProgress();
     _pageController.dispose();
+    for (final c in _zoomControllers.values) {
+      c.dispose();
+    }
+    _zoomControllers.clear();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
   }
@@ -426,7 +446,43 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
     });
   }
 
+  void _resetZoom() {
+    final controller = _zoomControllers[_currentDisplayIndex];
+    if (controller != null && controller.value != Matrix4.identity()) {
+      controller.value = Matrix4.identity();
+    }
+    if (_isZoomed) {
+      setState(() {
+        _isZoomed = false;
+      });
+    }
+  }
+
+  void _handleDoubleTap(int index) {
+    final controller = _getControllerFor(index);
+    final currentScale = controller.value.getMaxScaleOnAxis();
+
+    if (currentScale > 1.05 || _isZoomed) {
+      controller.value = Matrix4.identity();
+      setState(() {
+        _isZoomed = false;
+      });
+    } else {
+      final position = _doubleTapDetails?.localPosition ?? Offset.zero;
+      final x = -position.dx * 1.5;
+      final y = -position.dy * 1.5;
+      final zoomed = Matrix4.identity()
+        ..translate(x, y)
+        ..scale(2.5);
+      controller.value = zoomed;
+      setState(() {
+        _isZoomed = true;
+      });
+    }
+  }
+
   void _onDisplayPageChanged(int displayIndex) {
+    _resetZoom();
     if (displayIndex < 0 || displayIndex >= _displayItems.length) return;
     final originalIdx = _displayItems[displayIndex].primaryOriginalIndex;
     setState(() {
@@ -438,6 +494,7 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
   }
 
   void _jumpToPage(int originalIndex) {
+    _resetZoom();
     if (originalIndex < 0 || originalIndex >= _pages.length) return;
     setState(() {
       _currentPageIndex = originalIndex;
@@ -887,35 +944,65 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
         final isRtoL = settings.readingDirection == ReadingDirection.rightToLeft;
         final itemsCount = _displayItems.isNotEmpty ? _displayItems.length : _pages.length;
 
-        return GestureDetector(
-          onTapUp: (details) => _handleViewerTap(details, settings, constraints),
+        return Listener(
+          onPointerDown: (e) {
+            _activePointers.add(e.pointer);
+            if (_activePointers.length == 2) setState(() {});
+          },
+          onPointerUp: (e) {
+            _activePointers.remove(e.pointer);
+            if (_activePointers.length < 2) setState(() {});
+          },
+          onPointerCancel: (e) {
+            _activePointers.remove(e.pointer);
+            if (_activePointers.length < 2) setState(() {});
+          },
           child: PageView.builder(
-            controller: _pageController,
-            reverse: isRtoL,
-            itemCount: itemsCount,
-            onPageChanged: _onDisplayPageChanged,
-            itemBuilder: (context, index) {
-              if (_displayItems.isEmpty) {
-                return Center(
-                  child: InteractiveViewer(
-                    minScale: 1.0,
-                    maxScale: 4.0,
-                    child: _buildSinglePageImage(_pages[index], settings, index),
-                  ),
-                );
-              }
+          controller: _pageController,
+          physics: (_isZoomed || _activePointers.length >= 2) ? const NeverScrollableScrollPhysics() : const PageScrollPhysics(),
+          reverse: isRtoL,
+          itemCount: itemsCount,
+          onPageChanged: _onDisplayPageChanged,
+          itemBuilder: (context, index) {
+            final childWidget = _displayItems.isEmpty
+                ? _buildSinglePageImage(_pages[index], settings, index)
+                : _buildDisplayItemWidget(_displayItems[index], settings);
+            final controller = _getControllerFor(index);
 
-              final item = _displayItems[index];
-              return Center(
-                child: InteractiveViewer(
-                  minScale: 1.0,
-                  maxScale: 4.0,
-                  child: _buildDisplayItemWidget(item, settings),
+            return GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onDoubleTapDown: (details) => _doubleTapDetails = details,
+              onDoubleTap: () => _handleDoubleTap(index),
+              onTapUp: (details) {
+                final scale = controller.value.getMaxScaleOnAxis();
+                if (scale <= 1.05 && !_isZoomed) {
+                  _handleViewerTap(details, settings, constraints);
+                } else {
+                  _toggleControls();
+                }
+              },
+              child: InteractiveViewer(
+                transformationController: controller,
+                minScale: 1.0,
+                maxScale: 4.0,
+                panEnabled: _isZoomed,
+                scaleEnabled: true,
+                onInteractionEnd: (details) {
+                  final scale = controller.value.getMaxScaleOnAxis();
+                  final isZoomedNow = scale > 1.05;
+                  if (_isZoomed != isZoomedNow) {
+                    setState(() {
+                      _isZoomed = isZoomedNow;
+                    });
+                  }
+                },
+                child: Center(
+                  child: childWidget,
                 ),
-              );
-            },
-          ),
-        );
+              ),
+            );
+          },
+        ));
       },
     );
   }
