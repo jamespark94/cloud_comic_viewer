@@ -1263,7 +1263,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
   Widget _buildLargeIconsView(BuildContext context, double maxWidth) {
     final cols = math.max(2, (maxWidth / 160).floor());
     return GridView.builder(
-      padding: const EdgeInsets.all(12),
+      padding: EdgeInsets.fromLTRB(12, 12, 12, 24 + MediaQuery.of(context).padding.bottom),
       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: cols,
         childAspectRatio: 0.78,
@@ -1420,7 +1420,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
   Widget _buildSmallIconsView(BuildContext context, double maxWidth) {
     final cols = math.max(3, (maxWidth / 105).floor());
     return GridView.builder(
-      padding: const EdgeInsets.all(10),
+      padding: EdgeInsets.fromLTRB(10, 10, 10, 24 + MediaQuery.of(context).padding.bottom),
       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: cols,
         childAspectRatio: 0.88,
@@ -1546,6 +1546,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
   // 3. 목록 보기 (심플 1줄 리스트)
   Widget _buildListView(BuildContext context) {
     return ListView.builder(
+      padding: EdgeInsets.fromLTRB(0, 6, 0, 24 + MediaQuery.of(context).padding.bottom),
       itemCount: _filteredItems.length,
       itemBuilder: (context, index) {
         final item = _filteredItems[index];
@@ -1605,6 +1606,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
   // 4. 자세히 보기 (상세 정보 포함 리스트)
   Widget _buildDetailsView(BuildContext context) {
     return ListView.builder(
+      padding: EdgeInsets.fromLTRB(0, 6, 0, 24 + MediaQuery.of(context).padding.bottom),
       itemCount: _filteredItems.length,
       itemBuilder: (context, index) {
         final item = _filteredItems[index];
