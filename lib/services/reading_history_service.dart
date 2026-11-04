@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/comic_reading_history.dart';
+import '../models/ebook_content.dart';
 
 class ReadingHistoryService extends ChangeNotifier {
   static const String _storageKey = 'comic_reading_histories';
@@ -82,6 +83,11 @@ class ReadingHistoryService extends ChangeNotifier {
     required int pageIndex,
     required int totalPages,
     String? coverThumbnailUrl,
+    String? bookType,
+    int? chapterIndex,
+    String? chapterTitle,
+    int? charOffset,
+    List<EbookBookmark>? bookmarks,
   }) async {
     // 삭제 툼스톤이 존재한다면 (사용자가 삭제 후 다시 열람한 경우) 툼스톤 해제
     final deleted = await getDeletedRecords();
@@ -91,17 +97,23 @@ class ReadingHistoryService extends ChangeNotifier {
       await _saveDeletedRecords();
     }
 
+    final existing = _histories[id];
     final history = ComicReadingHistory(
       id: id,
       accountId: accountId,
       accountName: accountName,
       cloudType: cloudType,
       title: title,
-      parentFolderId: parentFolderId,
+      parentFolderId: parentFolderId ?? existing?.parentFolderId,
       lastPage: pageIndex,
-      totalPages: totalPages,
+      totalPages: totalPages > 0 ? totalPages : 1,
       lastReadAt: DateTime.now(),
-      coverThumbnailUrl: coverThumbnailUrl ?? _histories[id]?.coverThumbnailUrl,
+      coverThumbnailUrl: coverThumbnailUrl ?? existing?.coverThumbnailUrl,
+      bookType: bookType ?? existing?.bookType,
+      chapterIndex: chapterIndex ?? existing?.chapterIndex,
+      chapterTitle: chapterTitle ?? existing?.chapterTitle,
+      charOffset: charOffset ?? existing?.charOffset,
+      bookmarks: bookmarks ?? existing?.bookmarks ?? const [],
     );
 
     _histories[id] = history;
@@ -109,21 +121,22 @@ class ReadingHistoryService extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> updateBookmarks(String id, List<EbookBookmark> bookmarks) async {
+    final existing = _histories[id];
+    if (existing != null) {
+      _histories[id] = existing.copyWith(
+        bookmarks: bookmarks,
+        lastReadAt: DateTime.now(),
+      );
+      await _persist();
+      notifyListeners();
+    }
+  }
+
   Future<void> updateThumbnail(String id, String thumbnailPath) async {
     final existing = _histories[id];
     if (existing != null) {
-      _histories[id] = ComicReadingHistory(
-        id: existing.id,
-        accountId: existing.accountId,
-        accountName: existing.accountName,
-        cloudType: existing.cloudType,
-        title: existing.title,
-        parentFolderId: existing.parentFolderId,
-        lastPage: existing.lastPage,
-        totalPages: existing.totalPages,
-        lastReadAt: existing.lastReadAt,
-        coverThumbnailUrl: thumbnailPath,
-      );
+      _histories[id] = existing.copyWith(coverThumbnailUrl: thumbnailPath);
       await _persist();
       notifyListeners();
     }
@@ -259,10 +272,22 @@ class ReadingHistoryService extends ChangeNotifier {
       if (existing == null) {
         _histories[remote.id] = remote;
       } else {
+        final isRemoteNewer = remote.lastReadAt.isAfter(existing.lastReadAt);
         final higherPage = remote.lastPage > existing.lastPage ? remote.lastPage : existing.lastPage;
         final maxPages = remote.totalPages > existing.totalPages ? remote.totalPages : existing.totalPages;
-        final newerTime = remote.lastReadAt.isAfter(existing.lastReadAt) ? remote.lastReadAt : existing.lastReadAt;
+        final newerTime = isRemoteNewer ? remote.lastReadAt : existing.lastReadAt;
         final thumb = existing.coverThumbnailUrl ?? remote.coverThumbnailUrl;
+
+        // 북마크 병합 (ID 기준 중복 제거)
+        final bookmarkMap = <String, EbookBookmark>{};
+        for (final b in existing.bookmarks) {
+          bookmarkMap[b.id] = b;
+        }
+        for (final b in remote.bookmarks) {
+          bookmarkMap[b.id] = b;
+        }
+        final mergedBookmarks = bookmarkMap.values.toList()
+          ..sort((a, b) => a.charOffset.compareTo(b.charOffset));
 
         final mergedHistory = ComicReadingHistory(
           id: existing.id,
@@ -275,6 +300,15 @@ class ReadingHistoryService extends ChangeNotifier {
           totalPages: maxPages,
           lastReadAt: newerTime,
           coverThumbnailUrl: thumb,
+          bookType: existing.bookType ?? remote.bookType,
+          chapterIndex: isRemoteNewer
+              ? (remote.chapterIndex ?? existing.chapterIndex)
+              : (existing.chapterIndex ?? remote.chapterIndex),
+          chapterTitle: isRemoteNewer
+              ? (remote.chapterTitle ?? existing.chapterTitle)
+              : (existing.chapterTitle ?? remote.chapterTitle),
+          charOffset: math.max(existing.charOffset ?? 0, remote.charOffset ?? 0),
+          bookmarks: mergedBookmarks,
         );
 
         if (matchedKey != null && matchedKey != remote.id) {

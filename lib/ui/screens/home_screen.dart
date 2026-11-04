@@ -14,6 +14,8 @@ import '../../services/reading_history_service.dart';
 import 'add_account_dialog.dart';
 import 'browser_screen.dart';
 import 'comic_viewer_screen.dart';
+import 'ebook_reader_screen.dart';
+import 'pdf_viewer_screen.dart';
 
 /// 홈 화면 탐색기 보기 모드
 enum HomeViewMode {
@@ -351,7 +353,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     children: [
                       const Icon(Icons.history, size: 20, color: Colors.blueAccent),
                       const SizedBox(width: 8),
-                      Text('최근 읽은 만화 (${recentList.length})',
+                      Text('최근 읽은 작품 (${recentList.length})',
                           style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                     ],
                   ),
@@ -403,19 +405,63 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       isFolder: false,
     );
 
+    Widget targetScreen;
+    if (item.isTxt || item.isEpub || history.isTextOrEpub) {
+      targetScreen = EbookReaderScreen(
+        item: item,
+        service: service,
+        parentFolderId: history.parentFolderId,
+        initialCharOffset: history.charOffset,
+        initialPageIndex: history.lastPage,
+      );
+    } else if (item.isPdf || history.badgeLabel == 'PDF') {
+      targetScreen = PdfViewerScreen(
+        item: item,
+        service: service,
+        parentFolderId: history.parentFolderId,
+        initialPage: history.lastPage,
+      );
+    } else {
+      targetScreen = ComicViewerScreen(
+        item: item,
+        service: service,
+        initialPage: history.lastPage,
+      );
+    }
+
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => ComicViewerScreen(
-          item: item,
-          service: service,
-          initialPage: history.lastPage,
-        ),
-      ),
+      MaterialPageRoute(builder: (_) => targetScreen),
     ).then((_) {
       // 뷰어 종료 시 최신 진도를 백그라운드로 클라우드에 자동 동기화 푸시
       CloudHistorySyncService.instance.syncHistories(accountMgr, silent: true);
     });
+  }
+
+  Color _getHistoryBadgeColor(ComicReadingHistory history) {
+    switch (history.badgeLabel) {
+      case 'EPUB':
+        return Colors.orangeAccent;
+      case 'TXT':
+        return Colors.greenAccent;
+      case 'PDF':
+        return Colors.redAccent;
+      default:
+        return Colors.blueAccent;
+    }
+  }
+
+  IconData _getHistoryFallbackIcon(ComicReadingHistory history) {
+    switch (history.badgeLabel) {
+      case 'EPUB':
+        return Icons.menu_book_rounded;
+      case 'TXT':
+        return Icons.description_outlined;
+      case 'PDF':
+        return Icons.picture_as_pdf_outlined;
+      default:
+        return Icons.auto_stories;
+    }
   }
 
   // 큰 아이콘: 만화책 표지 중심 대형 그리드
@@ -434,6 +480,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       itemBuilder: (context, index) {
         final history = list[index];
         final hasThumb = history.coverThumbnailUrl != null && File(history.coverThumbnailUrl!).existsSync();
+        final badgeColor = _getHistoryBadgeColor(history);
+        final fallbackIcon = _getHistoryFallbackIcon(history);
 
         return Stack(
           children: [
@@ -459,12 +507,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               ? Image.file(
                                   File(history.coverThumbnailUrl!),
                                   fit: BoxFit.cover,
-                                  errorBuilder: (_, _, _) => const Center(
-                                    child: Icon(Icons.auto_stories, color: Colors.blueAccent, size: 36),
+                                  errorBuilder: (_, _, _) => Center(
+                                    child: Icon(fallbackIcon, color: badgeColor, size: 36),
                                   ),
                                 )
-                              : const Center(
-                                  child: Icon(Icons.auto_stories, color: Colors.blueAccent, size: 36),
+                              : Center(
+                                  child: Icon(fallbackIcon, color: badgeColor, size: 36),
                                 ),
                         ),
                       ),
@@ -495,17 +543,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               value: history.progress,
                               minHeight: 4,
                               backgroundColor: Colors.white12,
-                              valueColor: const AlwaysStoppedAnimation<Color>(Colors.blueAccent),
+                              valueColor: AlwaysStoppedAnimation<Color>(badgeColor),
                             ),
                           ),
                           const SizedBox(height: 4),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text(
-                                '${history.lastPage + 1} / ${history.totalPages}p',
-                                style: const TextStyle(color: Colors.blueAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                              Expanded(
+                                child: Text(
+                                  history.progressSummaryText,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(color: badgeColor, fontSize: 10, fontWeight: FontWeight.bold),
+                                ),
                               ),
+                              const SizedBox(width: 4),
                               Text(
                                 '${history.progressPercent}%',
                                 style: const TextStyle(color: Colors.white54, fontSize: 10),
@@ -516,6 +569,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       ),
                     ),
                   ],
+                ),
+              ),
+            ),
+            Positioned(
+              top: 6,
+              left: 6,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.black87,
+                  borderRadius: BorderRadius.circular(5),
+                  border: Border.all(color: badgeColor.withAlpha(120), width: 0.8),
+                ),
+                child: Text(
+                  history.badgeLabel,
+                  style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: badgeColor),
                 ),
               ),
             ),

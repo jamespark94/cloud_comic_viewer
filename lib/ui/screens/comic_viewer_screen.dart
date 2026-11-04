@@ -48,7 +48,7 @@ class ComicViewerScreen extends StatefulWidget {
   State<ComicViewerScreen> createState() => _ComicViewerScreenState();
 }
 
-class _ComicViewerScreenState extends State<ComicViewerScreen> {
+class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindingObserver {
   bool _isLoading = true;
   String? _errorMessage;
   double _downloadProgress = 0.0;
@@ -120,7 +120,42 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
     _setupItemPositionsListener();
 
     // 전체화면 및 시스템 UI 모드 진입
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    WidgetsBinding.instance.addObserver(this);
+
+    // 전체화면 및 시스템 UI 모드 진입
+    _applyMobileFullScreen(true);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _applyMobileFullScreen(true);
+    }
+  }
+
+  /// 모바일(Android/iOS) 전체화면 및 시스템 UI(상단바 날짜/배터리, 하단 내비게이션 바 등) 완전 제어
+  Future<void> _applyMobileFullScreen(bool enable) async {
+    if (enable) {
+      // 1. Flutter SystemChrome ImmersiveSticky 모드 적용
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      // 2. Android 플랫폼 네이티브 WindowInsetsController로 시스템 바(상태바/내비게이션바) 완전 숨김
+      if (Platform.isAndroid) {
+        try {
+          const channel = MethodChannel('com.antigravity.comic.cloud_comic_viewer/window');
+          await channel.invokeMethod('setFullScreen', {'enable': true});
+        } catch (_) {}
+      }
+    } else {
+      // 1. Flutter SystemChrome 복원
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      // 2. Android 네이티브 상태바/내비게이션바 복원
+      if (Platform.isAndroid) {
+        try {
+          const channel = MethodChannel('com.antigravity.comic.cloud_comic_viewer/window');
+          await channel.invokeMethod('setFullScreen', {'enable': false});
+        } catch (_) {}
+      }
+    }
   }
 
   Future<void> _fetchParentSiblingFolders() async {
@@ -191,7 +226,8 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> {
       c.dispose();
     }
     _zoomControllers.clear();
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    WidgetsBinding.instance.removeObserver(this);
+    _applyMobileFullScreen(false);
     super.dispose();
   }
 

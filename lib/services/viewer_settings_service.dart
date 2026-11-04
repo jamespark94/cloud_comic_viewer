@@ -87,6 +87,70 @@ class ViewerSettingsService extends ChangeNotifier {
     notifyListeners();
   }
 
+  // 이북 조판 설정 헬퍼 메서드들
+  Future<void> setEbookPageMode(EbookPageMode mode) async {
+    _settings = _settings.copyWith(ebookPageMode: mode);
+    await _persist();
+    notifyListeners();
+  }
+
+  Future<void> setEbookFontSize(double size) async {
+    _settings = _settings.copyWith(ebookFontSize: size.clamp(12.0, 40.0));
+    await _persist();
+    notifyListeners();
+  }
+
+  Future<void> setEbookLineHeight(double height) async {
+    _settings = _settings.copyWith(ebookLineHeight: height.clamp(1.1, 2.8));
+    await _persist();
+    notifyListeners();
+  }
+
+  Future<void> setEbookParagraphSpacing(double spacing) async {
+    _settings = _settings.copyWith(ebookParagraphSpacing: spacing.clamp(0.0, 36.0));
+    await _persist();
+    notifyListeners();
+  }
+
+  Future<void> setEbookMargins({double? horizontal, double? vertical}) async {
+    _settings = _settings.copyWith(
+      ebookHorizontalMargin: horizontal?.clamp(8.0, 64.0),
+      ebookVerticalMargin: vertical?.clamp(8.0, 64.0),
+    );
+    await _persist();
+    notifyListeners();
+  }
+
+  Future<void> setEbookFontFamily(String family) async {
+    _settings = _settings.copyWith(ebookFontFamily: family);
+    await _persist();
+    notifyListeners();
+  }
+
+  Future<void> toggleEbookJustifyText() async {
+    _settings = _settings.copyWith(ebookJustifyText: !_settings.ebookJustifyText);
+    await _persist();
+    notifyListeners();
+  }
+
+  Future<void> toggleEbookFirstLineIndent() async {
+    _settings = _settings.copyWith(ebookFirstLineIndent: !_settings.ebookFirstLineIndent);
+    await _persist();
+    notifyListeners();
+  }
+
+  Future<void> toggleVolumeKeysForPageTurn() async {
+    _settings = _settings.copyWith(useVolumeKeysForPageTurn: !_settings.useVolumeKeysForPageTurn);
+    await _persist();
+    notifyListeners();
+  }
+
+  Future<void> togglePdfDarkInvert() async {
+    _settings = _settings.copyWith(pdfDarkInvert: !_settings.pdfDarkInvert);
+    await _persist();
+    notifyListeners();
+  }
+
   Future<void> _persist() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_storageKey, jsonEncode(_settings.toJson()));

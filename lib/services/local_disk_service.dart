@@ -84,7 +84,7 @@ class LocalDiskService extends CloudService {
           isFolder: false,
         );
 
-        if (tempItem.isComicArchive || tempItem.isImage) {
+        if (tempItem.isViewable) {
           int? size;
           DateTime? modified;
           try {

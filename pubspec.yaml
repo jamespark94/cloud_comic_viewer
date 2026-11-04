@@ -55,6 +55,9 @@ dependencies:
   webview_flutter: ^4.14.1
   pointycastle: ^4.0.0
   google_sign_in: ^6.2.1
+  charset_converter: ^2.5.1
+  fast_gbk: ^1.0.0
+  pdfrx: ^2.11.0
 
 dev_dependencies:
   flutter_test:

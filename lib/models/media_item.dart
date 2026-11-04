@@ -1,3 +1,13 @@
+/// 미디어/전자책 포맷 구분 열거형
+enum MediaBookType {
+  comicArchive, // .zip, .cbz, .rar, .cbr, .7z, .tar
+  image,        // .jpg, .png, .webp 등
+  txt,          // .txt, .md
+  epub,         // .epub
+  pdf,          // .pdf
+  unknown,
+}
+
 class MediaItem {
   final String id;
   final String name;
@@ -21,7 +31,7 @@ class MediaItem {
     this.modifiedTime,
   });
 
-  /// 만화책 압축 파일 형식 판별 (.zip, .cbz, .rar, .cbr, .7z, .tar, .pdf 등)
+  /// 만화책 압축 파일 형식 판별 (.zip, .cbz, .rar, .cbr, .7z, .tar)
   bool get isComicArchive {
     if (isFolder) return false;
     final lowerName = name.toLowerCase();
@@ -52,8 +62,78 @@ class MediaItem {
     return false;
   }
 
-  /// 만화책 뷰어에서 열 수 있는 미디어인지 여부
-  bool get isViewable => isComicArchive || isImage;
+  /// 텍스트(TXT/MD) 전자책 파일 판별
+  bool get isTxt {
+    if (isFolder) return false;
+    final lowerName = name.toLowerCase();
+    if (lowerName.endsWith('.txt') || lowerName.endsWith('.md')) {
+      return true;
+    }
+    if (mimeType != null && mimeType!.toLowerCase().startsWith('text/plain')) {
+      return true;
+    }
+    return false;
+  }
+
+  /// EPUB 전자책 파일 판별
+  bool get isEpub {
+    if (isFolder) return false;
+    final lowerName = name.toLowerCase();
+    if (lowerName.endsWith('.epub')) {
+      return true;
+    }
+    if (mimeType != null && mimeType!.toLowerCase().contains('epub')) {
+      return true;
+    }
+    return false;
+  }
+
+  /// PDF 문서/만화 파일 판별
+  bool get isPdf {
+    if (isFolder) return false;
+    final lowerName = name.toLowerCase();
+    if (lowerName.endsWith('.pdf')) {
+      return true;
+    }
+    if (mimeType != null && mimeType!.toLowerCase() == 'application/pdf') {
+      return true;
+    }
+    return false;
+  }
+
+  /// 전자책(TXT, EPUB, PDF) 여부
+  bool get isEbook => isTxt || isEpub || isPdf;
+
+  /// 뷰어에서 열 수 있는 미디어(만화 + 이미지 + 전자책)인지 여부
+  bool get isViewable => isComicArchive || isImage || isEbook;
+
+  /// 미디어/전자책의 상세 포맷 타입 반환
+  MediaBookType get bookType {
+    if (isEpub) return MediaBookType.epub;
+    if (isTxt) return MediaBookType.txt;
+    if (isPdf) return MediaBookType.pdf;
+    if (isComicArchive) return MediaBookType.comicArchive;
+    if (isImage) return MediaBookType.image;
+    return MediaBookType.unknown;
+  }
+
+  /// UI 배지 텍스트 반환
+  String get formatBadgeLabel {
+    switch (bookType) {
+      case MediaBookType.epub:
+        return 'EPUB';
+      case MediaBookType.txt:
+        return 'TXT';
+      case MediaBookType.pdf:
+        return 'PDF';
+      case MediaBookType.comicArchive:
+        return 'COMIC';
+      case MediaBookType.image:
+        return 'IMG';
+      case MediaBookType.unknown:
+        return 'FILE';
+    }
+  }
 
   String get formattedSize {
     if (size == null || size == 0) return '';

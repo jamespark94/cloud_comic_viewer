@@ -16,6 +16,8 @@ import '../../services/local_disk_service.dart';
 import '../../services/reading_history_service.dart';
 import '../../utils/permission_utils.dart';
 import 'comic_viewer_screen.dart';
+import 'ebook_reader_screen.dart';
+import 'pdf_viewer_screen.dart';
 
 enum BrowserViewMode {
   largeIcons('큰 아이콘', Icons.grid_view_rounded),
@@ -234,7 +236,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
   void _openComicViewer(MediaItem item) {
     if (!item.isViewable) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('만화책 압축 파일(ZIP/CBZ) 또는 이미지 파일만 열 수 있습니다.')),
+        const SnackBar(content: Text('지원하지 않는 파일 형식입니다. (만화/이미지/TXT/EPUB/PDF 지원)')),
       );
       return;
     }
@@ -244,23 +246,54 @@ class _BrowserScreenState extends State<BrowserScreen> {
       parentFolderId = _folderStack[_folderStack.length - 2].key;
     }
 
+    Widget targetScreen;
+    if (item.isTxt || item.isEpub) {
+      targetScreen = EbookReaderScreen(
+        item: item,
+        service: widget.service,
+        folderSiblings: _allItems,
+        parentFolderId: parentFolderId,
+      );
+    } else if (item.isPdf) {
+      targetScreen = PdfViewerScreen(
+        item: item,
+        service: widget.service,
+        folderSiblings: _allItems,
+        parentFolderId: parentFolderId,
+      );
+    } else {
+      targetScreen = ComicViewerScreen(
+        item: item,
+        service: widget.service,
+        folderSiblings: _allItems,
+        parentFolderId: parentFolderId,
+        currentFolderName: _folderStack.isNotEmpty ? _folderStack.last.value : null,
+      );
+    }
+
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => ComicViewerScreen(
-          item: item,
-          service: widget.service,
-          folderSiblings: _allItems,
-          parentFolderId: parentFolderId,
-          currentFolderName: _folderStack.isNotEmpty ? _folderStack.last.value : null,
-        ),
-      ),
+      MaterialPageRoute(builder: (_) => targetScreen),
     ).then((_) {
       if (mounted) {
         final accountMgr = context.read<AccountManager>();
         CloudHistorySyncService.instance.syncHistories(accountMgr, silent: true);
       }
     });
+  }
+
+  ({IconData icon, Color color, String badge}) _getFileVisuals(MediaItem item) {
+    if (item.isEpub) {
+      return (icon: Icons.menu_book_rounded, color: Colors.orangeAccent, badge: 'EPUB');
+    } else if (item.isTxt) {
+      return (icon: Icons.description_outlined, color: Colors.greenAccent, badge: 'TXT');
+    } else if (item.isPdf) {
+      return (icon: Icons.picture_as_pdf_outlined, color: Colors.redAccent, badge: 'PDF');
+    } else if (item.isComicArchive) {
+      return (icon: Icons.auto_stories, color: Colors.blueAccent, badge: 'COMIC');
+    } else {
+      return (icon: Icons.image, color: Colors.tealAccent, badge: 'IMG');
+    }
   }
 
   Future<void> _toggleFolderShortcut(
@@ -1346,8 +1379,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
           );
         }
 
-        final isArchive = item.isComicArchive;
-        final iconColor = isArchive ? Colors.blueAccent : Colors.tealAccent;
+        final visuals = _getFileVisuals(item);
+        final iconColor = visuals.color;
 
         return InkWell(
           onTap: () => _openComicViewer(item),
@@ -1374,7 +1407,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Icon(
-                          isArchive ? Icons.auto_stories : Icons.image,
+                          visuals.icon,
                           size: 32,
                           color: iconColor,
                         ),
@@ -1394,6 +1427,21 @@ class _BrowserScreenState extends State<BrowserScreen> {
                           style: const TextStyle(color: Colors.white38, fontSize: 10.5),
                         ),
                     ],
+                  ),
+                ),
+                Positioned(
+                  top: 2,
+                  left: 2,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: iconColor.withAlpha(45),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      visuals.badge,
+                      style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: iconColor),
+                    ),
                   ),
                 ),
                 Positioned(
@@ -1480,8 +1528,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
           );
         }
 
-        final isArchive = item.isComicArchive;
-        final iconColor = isArchive ? Colors.blueAccent : Colors.tealAccent;
+        final visuals = _getFileVisuals(item);
+        final iconColor = visuals.color;
 
         return InkWell(
           onTap: () => _openComicViewer(item),
@@ -1501,7 +1549,7 @@ class _BrowserScreenState extends State<BrowserScreen> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Icon(
-                        isArchive ? Icons.auto_stories : Icons.image,
+                        visuals.icon,
                         size: 30,
                         color: iconColor,
                       ),
@@ -1574,13 +1622,13 @@ class _BrowserScreenState extends State<BrowserScreen> {
           );
         }
 
-        final isArchive = item.isComicArchive;
-        final iconColor = isArchive ? Colors.blueAccent : Colors.tealAccent;
+        final visuals = _getFileVisuals(item);
+        final iconColor = visuals.color;
 
         return ListTile(
           dense: true,
           visualDensity: const VisualDensity(vertical: -1),
-          leading: Icon(isArchive ? Icons.auto_stories : Icons.image, color: iconColor, size: 24),
+          leading: Icon(visuals.icon, color: iconColor, size: 24),
           title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13.5)),
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
@@ -1633,9 +1681,9 @@ class _BrowserScreenState extends State<BrowserScreen> {
           );
         }
 
-        final isArchive = item.isComicArchive;
-        final iconColor = isArchive ? Colors.blueAccent : Colors.tealAccent;
-        final icon = isArchive ? Icons.auto_stories : Icons.image;
+        final visuals = _getFileVisuals(item);
+        final iconColor = visuals.color;
+        final icon = visuals.icon;
 
         return ListTile(
           leading: Container(
@@ -1650,6 +1698,18 @@ class _BrowserScreenState extends State<BrowserScreen> {
           title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14)),
           subtitle: Row(
             children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                margin: const EdgeInsets.only(right: 6),
+                decoration: BoxDecoration(
+                  color: iconColor.withAlpha(35),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  visuals.badge,
+                  style: TextStyle(color: iconColor, fontSize: 9.5, fontWeight: FontWeight.bold),
+                ),
+              ),
               if (item.formattedSize.isNotEmpty) ...[
                 Text(item.formattedSize, style: const TextStyle(color: Colors.grey, fontSize: 12)),
                 const SizedBox(width: 8),
@@ -1665,8 +1725,8 @@ class _BrowserScreenState extends State<BrowserScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               IconButton(
-                icon: const Icon(Icons.menu_book, color: Colors.blueAccent, size: 22),
-                tooltip: '만화 열기',
+                icon: Icon(Icons.menu_book, color: iconColor, size: 22),
+                tooltip: '열기',
                 onPressed: () => _openComicViewer(item),
               ),
               IconButton(

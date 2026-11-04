@@ -1,4 +1,4 @@
-﻿import 'dart:io';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:path_provider/path_provider.dart';
@@ -24,7 +24,8 @@ class ComicCacheManager {
   String _getCacheKey(String accountId, MediaItem item) {
     final raw = '$accountId:${item.id}:${item.name}';
     final hash = md5.convert(raw.codeUnits).toString();
-    return '${hash}_${item.name}';
+    final safeName = item.name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+    return '${hash}_$safeName';
   }
 
   /// 캐시된 파일이 있는지 확인하고 파일 경로를 반환합니다.
@@ -38,7 +39,7 @@ class ComicCacheManager {
     return null;
   }
 
-  /// 클라우드 또는 로컬에서 만화책 바이트를 로드하거나 캐시합니다.
+  /// 클라우드 또는 로컬에서 만화책/전자책 바이트를 로드하거나 캐시합니다.
   Future<Uint8List> loadOrDownloadComicBytes(
     CloudService service,
     MediaItem item, {
@@ -51,7 +52,7 @@ class ComicCacheManager {
 
     // 2. 캐시 디스크 확인
     final cached = await getCachedFile(service.account.id, item);
-    if (cached != null && (await cached.length()) > 500) {
+    if (cached != null && (await cached.length()) > 0) {
       final bytes = await cached.readAsBytes();
       if (onProgress != null) {
         onProgress(bytes.length, bytes.length);
@@ -71,6 +72,36 @@ class ComicCacheManager {
     } catch (_) {}
 
     return bytes;
+  }
+
+  /// 클라우드 또는 로컬에서 파일을 다운로드하여 로컬 디스크 File 객체로 반환합니다 (PDF 뷰어 등 파일 기반 엔진용).
+  Future<File> loadOrDownloadFile(
+    CloudService service,
+    MediaItem item, {
+    void Function(int received, int total)? onProgress,
+  }) async {
+    if (service.account.id == 'local') {
+      final f = File(item.id);
+      if (await f.exists()) {
+        final len = await f.length();
+        onProgress?.call(len, len);
+        return f;
+      }
+    }
+
+    final cached = await getCachedFile(service.account.id, item);
+    if (cached != null && (await cached.length()) > 0) {
+      final len = await cached.length();
+      onProgress?.call(len, len);
+      return cached;
+    }
+
+    final bytes = await service.downloadBytes(item, onProgress: onProgress);
+    final dir = await _getCacheDirectory();
+    final fileName = _getCacheKey(service.account.id, item);
+    final cacheFile = File(p.join(dir.path, fileName));
+    await cacheFile.writeAsBytes(bytes, flush: true);
+    return cacheFile;
   }
 
   /// 캐시 디렉토리 전체 용량 확인
