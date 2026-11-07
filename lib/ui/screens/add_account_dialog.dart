@@ -1612,7 +1612,7 @@ class _AddAccountDialogState extends State<AddAccountDialog> with WidgetsBinding
             ],
 
             const SizedBox(height: 16),
-            if (type == CloudType.googleDrive && (Platform.isAndroid || Platform.isIOS)) ...[
+            if (type == CloudType.googleDrive && Platform.isAndroid) ...[
               SizedBox(
                 width: double.infinity,
                 child: GoogleLoginButton(
