@@ -68,6 +68,11 @@ class GoogleAuthManager {
 
   /// 대화형 로그인 (네이티브 바텀시트 / 계정 선택기)
   Future<GoogleSignInAccount?> signIn() async {
+    if (Platform.isIOS) {
+      debugPrint('[GoogleAuthManager] iOS에서는 네이티브 GIDSignIn이 지원되지 않습니다.');
+      return null;
+    }
+
     try {
       final account = await _googleSignIn.signIn();
       if (account == null) {
