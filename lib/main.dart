@@ -10,12 +10,14 @@ import 'services/reading_history_service.dart';
 import 'services/viewer_settings_service.dart';
 import 'ui/screens/home_screen.dart';
 import 'utils/platform_utils.dart';
+import 'utils/window_state_manager.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
+    await WindowStateManager.instance.initialize();
   }
 
   // 1. 플랫폼 감지 초기화

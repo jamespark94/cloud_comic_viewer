@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:window_manager/window_manager.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:provider/provider.dart';
 import '../../models/comic_page.dart';
@@ -56,12 +57,15 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
   bool _isStreamed = false;
   String? _toastMessage;
   Timer? _toastTimer;
+  Timer? _hideControlsTimer;
 
   List<ComicPage> _pages = [];
   List<DisplayPageItem> _displayItems = [];
   int _currentPageIndex = 0;
   int _currentDisplayIndex = 0;
   bool _showControls = true;
+  bool _isFullScreen = false;
+  final FocusNode _focusNode = FocusNode();
 
   late final PageController _pageController;
   final ItemScrollController _itemScrollController = ItemScrollController();
@@ -124,6 +128,79 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
 
     // 전체화면 및 시스템 UI 모드 진입
     _applyMobileFullScreen(true);
+    _initDesktopFullScreenState();
+    _startHideControlsTimer();
+  }
+
+  Future<void> _initDesktopFullScreenState() async {
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      try {
+        final isFull = await windowManager.isFullScreen();
+        if (mounted) {
+          setState(() {
+            _isFullScreen = isFull;
+          });
+        }
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _toggleFullScreen() async {
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      try {
+        final isFull = await windowManager.isFullScreen();
+        final targetFull = !isFull;
+        if (targetFull) {
+          // 윈도우 타이틀바/최소화/최대화/닫기 프레임을 완전히 없애고 전체화면 적용
+          await windowManager.setTitleBarStyle(TitleBarStyle.hidden, windowButtonVisibility: false);
+          await windowManager.setFullScreen(true);
+        } else {
+          // 전체화면 복원 시 표준 타이틀바 스타일 복원
+          await windowManager.setFullScreen(false);
+          await windowManager.setTitleBarStyle(TitleBarStyle.normal, windowButtonVisibility: true);
+        }
+        if (mounted) {
+          setState(() {
+            _isFullScreen = targetFull;
+          });
+          _showModeToast(_isFullScreen ? '전체화면 켜짐 (Enter / ESC로 종료)' : '전체화면 종료');
+        }
+      } catch (_) {}
+    } else {
+      final next = !_isFullScreen;
+      await _applyMobileFullScreen(next);
+      if (mounted) {
+        setState(() {
+          _isFullScreen = next;
+        });
+      }
+    }
+  }
+
+  Future<void> _exitFullScreen() async {
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      try {
+        final isFull = await windowManager.isFullScreen();
+        if (isFull) {
+          await windowManager.setFullScreen(false);
+          await windowManager.setTitleBarStyle(TitleBarStyle.normal, windowButtonVisibility: true);
+          if (mounted) {
+            setState(() {
+              _isFullScreen = false;
+            });
+          }
+        }
+      } catch (_) {}
+    } else {
+      if (_isFullScreen) {
+        await _applyMobileFullScreen(false);
+        if (mounted) {
+          setState(() {
+            _isFullScreen = false;
+          });
+        }
+      }
+    }
   }
 
   @override
@@ -219,7 +296,10 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
 
   @override
   void dispose() {
+    _focusNode.dispose();
+    _exitFullScreen();
     _toastTimer?.cancel();
+    _hideControlsTimer?.cancel();
     _saveReadingProgress();
     _pageController.dispose();
     for (final c in _zoomControllers.values) {
@@ -552,10 +632,26 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
     _preloadAdjacentPages(originalIndex);
   }
 
+  void _startHideControlsTimer({Duration duration = const Duration(seconds: 4)}) {
+    _hideControlsTimer?.cancel();
+    _hideControlsTimer = Timer(duration, () {
+      if (mounted && _showControls) {
+        setState(() {
+          _showControls = false;
+        });
+      }
+    });
+  }
+
   void _toggleControls() {
     setState(() {
       _showControls = !_showControls;
     });
+    if (_showControls) {
+      _startHideControlsTimer();
+    } else {
+      _hideControlsTimer?.cancel();
+    }
   }
 
   bool get _hasPrevVolume {
@@ -689,62 +785,151 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
           }
         }
 
-        return Scaffold(
-          backgroundColor: bgColor,
-          body: Stack(
-            children: [
-              // 1. 만화책 메인 뷰어 영역
-              Positioned.fill(
-                child: _buildViewerContent(settings, orientation),
-              ),
+        return PopScope(
+          canPop: !_isFullScreen,
+          onPopInvokedWithResult: (didPop, _) async {
+            if (didPop) return;
+            if (_isFullScreen) {
+              await _exitFullScreen();
+            }
+          },
+          child: Focus(
+            focusNode: _focusNode,
+            autofocus: true,
+            onKeyEvent: (node, event) {
+              if (event is! KeyDownEvent) return KeyEventResult.ignored;
 
-              // 2. 상단 앱바 오버레이
-              if (_showControls)
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: _buildTopBar(settingsService),
-                ),
+              final key = event.logicalKey;
 
-              // 3. 중앙 모드 변경 토스트 오버레이
-              if (_toastMessage != null)
-                Positioned(
-                  top: MediaQuery.of(context).padding.top + 64,
-                  left: 0,
-                  right: 0,
-                  child: Center(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
-                      decoration: BoxDecoration(
-                        color: Colors.black87,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: Colors.blueAccent.withValues(alpha: 0.6), width: 1.5),
-                        boxShadow: const [
-                          BoxShadow(color: Colors.black45, blurRadius: 10, offset: Offset(0, 3)),
-                        ],
-                      ),
-                      child: Text(
-                        _toastMessage!,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold,
+              // 1. ESC 키: 전체화면 중이면 전체화면 해제, 아니면 메뉴/이전 화면(Navigator.pop)으로 빠져나가기
+              if (key == LogicalKeyboardKey.escape) {
+                if (_isFullScreen) {
+                  _exitFullScreen();
+                } else {
+                  Navigator.of(context).maybePop();
+                }
+                return KeyEventResult.handled;
+              }
+
+              // 2. Enter 및 F11 키: 전체화면 토글
+              if (key == LogicalKeyboardKey.enter ||
+                  key == LogicalKeyboardKey.numpadEnter ||
+                  key == LogicalKeyboardKey.f11) {
+                _toggleFullScreen();
+                return KeyEventResult.handled;
+              }
+
+              // 3. Space 키: 보는 방향이 어느 쪽이든 항상 다음 장
+              if (key == LogicalKeyboardKey.space) {
+                _goToNext();
+                return KeyEventResult.handled;
+              }
+
+              // 4. 좌/우 방향키: 보는 방향(좌->우 vs 우->좌 일본식)에 따라 네비게이션
+              // 일본 만화 (우->좌): 오른쪽 키 = 이전 장, 왼쪽 키 = 다음 장
+              // 일반 만화 (좌->우): 왼쪽 키 = 이전 장, 오른쪽 키 = 다음 장
+              if (key == LogicalKeyboardKey.arrowLeft) {
+                if (settings.readingDirection == ReadingDirection.rightToLeft) {
+                  _goToNext();
+                } else {
+                  _goToPrevious();
+                }
+                return KeyEventResult.handled;
+              } else if (key == LogicalKeyboardKey.arrowRight) {
+                if (settings.readingDirection == ReadingDirection.rightToLeft) {
+                  _goToPrevious();
+                } else {
+                  _goToNext();
+                }
+                return KeyEventResult.handled;
+              }
+
+              // 5. 상/하 방향키 (웹툰 모드 또는 페이지 넘김 보조)
+              if (key == LogicalKeyboardKey.arrowUp || key == LogicalKeyboardKey.pageUp) {
+                _goToPrevious();
+                return KeyEventResult.handled;
+              } else if (key == LogicalKeyboardKey.arrowDown || key == LogicalKeyboardKey.pageDown) {
+                _goToNext();
+                return KeyEventResult.handled;
+              }
+
+              return KeyEventResult.ignored;
+            },
+            child: MouseRegion(
+              onHover: (event) {
+                if (!Platform.isWindows && !Platform.isLinux && !Platform.isMacOS) return;
+                if (!_showControls) {
+                  setState(() => _showControls = true);
+                }
+                _startHideControlsTimer();
+              },
+              child: Scaffold(
+                backgroundColor: bgColor,
+                body: Stack(
+                  children: [
+                    // 1. 만화책 메인 뷰어 영역
+                    Positioned.fill(
+                      child: _buildViewerContent(settings, orientation),
+                    ),
+
+                    // 2. 상단 앱바 오버레이
+                    if (_showControls)
+                      Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        child: MouseRegion(
+                          onEnter: (_) => _hideControlsTimer?.cancel(),
+                          onExit: (_) => _startHideControlsTimer(),
+                          child: _buildTopBar(settingsService),
                         ),
                       ),
-                    ),
-                  ),
-                ),
 
-              // 4. 하단 컨트롤 툴바 오버레이
-              if (_showControls && !_isLoading && _pages.isNotEmpty)
-                Positioned(
-                  bottom: 0,
-                  left: 0,
-                  right: 0,
-                  child: _buildBottomBar(settingsService),
+                    // 3. 중앙 모드 변경 토스트 오버레이
+                    if (_toastMessage != null)
+                      Positioned(
+                        top: MediaQuery.of(context).padding.top + 64,
+                        left: 0,
+                        right: 0,
+                        child: Center(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+                            decoration: BoxDecoration(
+                              color: Colors.black87,
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(color: Colors.blueAccent.withValues(alpha: 0.6), width: 1.5),
+                              boxShadow: const [
+                                BoxShadow(color: Colors.black45, blurRadius: 10, offset: Offset(0, 3)),
+                              ],
+                            ),
+                            child: Text(
+                              _toastMessage!,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+
+                    // 4. 하단 컨트롤 툴바 오버레이
+                    if (_showControls && !_isLoading && _pages.isNotEmpty)
+                      Positioned(
+                        bottom: 0,
+                        left: 0,
+                        right: 0,
+                        child: MouseRegion(
+                          onEnter: (_) => _hideControlsTimer?.cancel(),
+                          onExit: (_) => _startHideControlsTimer(),
+                          child: _buildBottomBar(settingsService),
+                        ),
+                      ),
+                  ],
                 ),
-            ],
+              ),
+            ),
           ),
         );
       },
@@ -1365,6 +1550,15 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
             tooltip: '뷰어 설정',
             onPressed: () => ViewerSettingsDialog.show(context, settingsService),
           ),
+          // 전체화면 토글 버튼 (Windows/Desktop 및 모바일)
+          IconButton(
+            icon: Icon(
+              _isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
+              color: Colors.white,
+            ),
+            tooltip: _isFullScreen ? '전체화면 종료 (Enter / ESC / F11)' : '전체화면 (Enter / F11)',
+            onPressed: _toggleFullScreen,
+          ),
         ],
       ),
     );
@@ -1463,6 +1657,8 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
                   divisions: _pages.length > 1 ? _pages.length - 1 : 1,
                   activeColor: Colors.blueAccent,
                   inactiveColor: Colors.white24,
+                  onChangeStart: (_) => _hideControlsTimer?.cancel(),
+                  onChangeEnd: (_) => _startHideControlsTimer(),
                   onChanged: (val) {
                     _jumpToPage(val.round());
                   },
