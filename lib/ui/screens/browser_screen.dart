@@ -15,6 +15,7 @@ import '../../services/folder_shortcut_manager.dart';
 import '../../services/local_disk_service.dart';
 import '../../services/reading_history_service.dart';
 import '../../utils/permission_utils.dart';
+import '../../utils/sort_utils.dart';
 import 'comic_viewer_screen.dart';
 import 'ebook_reader_screen.dart';
 import 'pdf_viewer_screen.dart';
@@ -78,7 +79,11 @@ class _BrowserScreenState extends State<BrowserScreen> {
   String get _currentFolderPath => _folderStack.map((e) => e.value).join(' > ');
 
   static const String _prefViewModeKey = 'comic_browser_view_mode';
+  static const String _prefSortFieldKey = 'comic_browser_sort_field';
+  static const String _prefSortAscKey = 'comic_browser_sort_ascending';
   BrowserViewMode _viewMode = BrowserViewMode.details;
+  SortField _sortField = SortField.name;
+  bool _sortAscending = true;
 
   @override
   void initState() {
@@ -95,14 +100,28 @@ class _BrowserScreenState extends State<BrowserScreen> {
   Future<void> _loadViewMode() async {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getString(_prefViewModeKey);
-    if (saved != null) {
-      final mode = BrowserViewMode.values.firstWhere(
-        (m) => m.name == saved,
-        orElse: () => BrowserViewMode.details,
-      );
-      if (mounted) {
-        setState(() => _viewMode = mode);
-      }
+    final savedSortField = prefs.getString(_prefSortFieldKey);
+    final savedSortAsc = prefs.getBool(_prefSortAscKey);
+
+    if (mounted) {
+      setState(() {
+        if (saved != null) {
+          _viewMode = BrowserViewMode.values.firstWhere(
+            (m) => m.name == saved,
+            orElse: () => BrowserViewMode.details,
+          );
+        }
+        if (savedSortField != null) {
+          _sortField = SortField.values.firstWhere(
+            (f) => f.name == savedSortField,
+            orElse: () => SortField.name,
+          );
+        }
+        if (savedSortAsc != null) {
+          _sortAscending = savedSortAsc;
+        }
+        _applyFilter();
+      });
     }
   }
 
@@ -110,6 +129,22 @@ class _BrowserScreenState extends State<BrowserScreen> {
     setState(() => _viewMode = mode);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_prefViewModeKey, mode.name);
+  }
+
+  Future<void> _changeSort(SortField field, {required bool ascending}) async {
+    setState(() {
+      _sortField = field;
+      _sortAscending = ascending;
+      _applyFilter();
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefSortFieldKey, field.name);
+    await prefs.setBool(_prefSortAscKey, ascending);
+  }
+
+  void _onSelectSortField(SortField field) {
+    final nextAsc = field == _sortField ? !_sortAscending : field.defaultAscending;
+    _changeSort(field, ascending: nextAsc);
   }
 
   @override
@@ -159,12 +194,18 @@ class _BrowserScreenState extends State<BrowserScreen> {
   }
 
   void _applyFilter() {
+    final List<MediaItem> filtered;
     if (_searchQuery.trim().isEmpty) {
-      _filteredItems = List.from(_allItems);
+      filtered = List.from(_allItems);
     } else {
       final q = _searchQuery.toLowerCase();
-      _filteredItems = _allItems.where((item) => item.name.toLowerCase().contains(q)).toList();
+      filtered = _allItems.where((item) => item.name.toLowerCase().contains(q)).toList();
     }
+    _filteredItems = SortUtils.sortMediaItems(
+      filtered,
+      field: _sortField,
+      ascending: _sortAscending,
+    );
   }
 
   void _navigateToFolder(MediaItem folder) {
@@ -1193,40 +1234,173 @@ class _BrowserScreenState extends State<BrowserScreen> {
     return Container(
       height: 52,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      child: TextField(
-        controller: _searchController,
-        style: const TextStyle(fontSize: 14),
-        decoration: InputDecoration(
-          hintText: '현재 폴더 내 만화책/이미지 검색...',
-          hintStyle: const TextStyle(color: Colors.white38, fontSize: 13),
-          prefixIcon: const Icon(Icons.search, size: 20, color: Colors.white54),
-          suffixIcon: _searchQuery.isNotEmpty
-              ? IconButton(
-                  icon: const Icon(Icons.clear, size: 18, color: Colors.white54),
-                  onPressed: () {
-                    _searchController.clear();
-                    setState(() {
-                      _searchQuery = '';
-                      _applyFilter();
-                    });
-                  },
-                )
-              : null,
-          contentPadding: EdgeInsets.zero,
-          filled: true,
-          fillColor: const Color(0xFF1B202B),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: BorderSide.none,
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _searchController,
+              style: const TextStyle(fontSize: 14),
+              decoration: InputDecoration(
+                hintText: '현재 폴더 내 만화책/이미지 검색...',
+                hintStyle: const TextStyle(color: Colors.white38, fontSize: 13),
+                prefixIcon: const Icon(Icons.search, size: 20, color: Colors.white54),
+                suffixIcon: _searchQuery.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear, size: 18, color: Colors.white54),
+                        onPressed: () {
+                          _searchController.clear();
+                          setState(() {
+                            _searchQuery = '';
+                            _applyFilter();
+                          });
+                        },
+                      )
+                    : null,
+                contentPadding: EdgeInsets.zero,
+                filled: true,
+                fillColor: const Color(0xFF1B202B),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+              onChanged: (val) {
+                setState(() {
+                  _searchQuery = val;
+                  _applyFilter();
+                });
+              },
+            ),
+          ),
+          const SizedBox(width: 8),
+          _buildSortMenuButton(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSortMenuButton() {
+    return PopupMenuButton<String>(
+      tooltip: '정렬 기준 (${_sortField.label} ${_sortAscending ? "오름차순" : "내림차순"})',
+      onSelected: (value) {
+        if (value == 'dir:asc') {
+          _changeSort(_sortField, ascending: true);
+        } else if (value == 'dir:desc') {
+          _changeSort(_sortField, ascending: false);
+        } else if (value.startsWith('field:')) {
+          final name = value.substring('field:'.length);
+          final field = SortField.values.firstWhere(
+            (f) => f.name == name,
+            orElse: () => SortField.name,
+          );
+          _onSelectSortField(field);
+        }
+      },
+      child: Container(
+        height: 40,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1B202B),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.white12),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.sort_rounded, size: 17, color: Colors.blueAccent),
+            const SizedBox(width: 5),
+            Text(
+              _sortField.label,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white),
+            ),
+            const SizedBox(width: 2),
+            Icon(
+              _sortAscending ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded,
+              size: 14,
+              color: Colors.blueAccent,
+            ),
+          ],
+        ),
+      ),
+      itemBuilder: (context) => [
+        ...SortField.values.map((field) {
+          final isSelected = field == _sortField;
+          return PopupMenuItem<String>(
+            value: 'field:${field.name}',
+            child: Row(
+              children: [
+                Icon(
+                  field.icon,
+                  size: 18,
+                  color: isSelected ? Colors.blueAccent : Colors.white70,
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  field.label,
+                  style: TextStyle(
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                    color: isSelected ? Colors.blueAccent : Colors.white,
+                  ),
+                ),
+                const Spacer(),
+                if (isSelected)
+                  Icon(
+                    _sortAscending ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded,
+                    size: 16,
+                    color: Colors.blueAccent,
+                  ),
+              ],
+            ),
+          );
+        }),
+        const PopupMenuDivider(),
+        PopupMenuItem<String>(
+          value: 'dir:asc',
+          child: Row(
+            children: [
+              Icon(
+                Icons.arrow_upward_rounded,
+                size: 18,
+                color: _sortAscending ? Colors.blueAccent : Colors.white70,
+              ),
+              const SizedBox(width: 10),
+              Text(
+                '오름차순',
+                style: TextStyle(
+                  fontWeight: _sortAscending ? FontWeight.bold : FontWeight.normal,
+                  color: _sortAscending ? Colors.blueAccent : Colors.white,
+                ),
+              ),
+              const Spacer(),
+              if (_sortAscending)
+                const Icon(Icons.check, size: 16, color: Colors.blueAccent),
+            ],
           ),
         ),
-        onChanged: (val) {
-          setState(() {
-            _searchQuery = val;
-            _applyFilter();
-          });
-        },
-      ),
+        PopupMenuItem<String>(
+          value: 'dir:desc',
+          child: Row(
+            children: [
+              Icon(
+                Icons.arrow_downward_rounded,
+                size: 18,
+                color: !_sortAscending ? Colors.blueAccent : Colors.white70,
+              ),
+              const SizedBox(width: 10),
+              Text(
+                '내림차순',
+                style: TextStyle(
+                  fontWeight: !_sortAscending ? FontWeight.bold : FontWeight.normal,
+                  color: !_sortAscending ? Colors.blueAccent : Colors.white,
+                ),
+              ),
+              const Spacer(),
+              if (!_sortAscending)
+                const Icon(Icons.check, size: 16, color: Colors.blueAccent),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
