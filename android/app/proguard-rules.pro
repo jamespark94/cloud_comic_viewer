@@ -19,3 +19,9 @@
 -keepclasseswithmembernames class * {
     native <methods>;
 }
+
+# Google ML Kit (Text Recognition & On-Device Translation)
+-keep class com.google.mlkit.** { *; }
+-dontwarn com.google.mlkit.**
+-keep class com.google.android.gms.internal.mlkit_vision_text_common.** { *; }
+-dontwarn com.google.android.gms.**

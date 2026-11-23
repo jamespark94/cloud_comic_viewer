@@ -151,6 +151,25 @@ class ViewerSettingsService extends ChangeNotifier {
     notifyListeners();
   }
 
+  // AI 만화 번역 설정 헬퍼 메서드들
+  Future<void> setTranslationMode(ComicTranslationMode mode) async {
+    _settings = _settings.copyWith(translationMode: mode);
+    await _persist();
+    notifyListeners();
+  }
+
+  Future<void> setTranslationEngineType(ComicTranslationEngineType engineType) async {
+    _settings = _settings.copyWith(translationEngineType: engineType);
+    await _persist();
+    notifyListeners();
+  }
+
+  Future<void> setTranslationSourceLang(ComicSourceLanguage lang) async {
+    _settings = _settings.copyWith(translationSourceLang: lang);
+    await _persist();
+    notifyListeners();
+  }
+
   Future<void> _persist() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_storageKey, jsonEncode(_settings.toJson()));

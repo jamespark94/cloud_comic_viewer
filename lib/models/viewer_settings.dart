@@ -70,6 +70,39 @@ enum EbookPageMode {
   const EbookPageMode(this.label, this.icon);
 }
 
+/// AI 만화 번역 실행 모드
+enum ComicTranslationMode {
+  off('끄기', Icons.translate),
+  manual('수동 번역', Icons.touch_app_outlined),
+  auto('자동 번역', Icons.auto_awesome);
+
+  final String label;
+  final IconData icon;
+  const ComicTranslationMode(this.label, this.icon);
+}
+
+/// AI 만화 번역 엔진 타입
+enum ComicTranslationEngineType {
+  onDevice('로컬 무료 모드', '온디바이스 OCR + 무료 번역'),
+  cloudVision('클라우드 고품질 모드', 'Gemini 멀티모달 Vision AI');
+
+  final String label;
+  final String description;
+  const ComicTranslationEngineType(this.label, this.description);
+}
+
+/// AI 만화 번역 원본 언어
+enum ComicSourceLanguage {
+  auto('자동', 'auto'),
+  japanese('일본어', 'ja'),
+  english('영어', 'en'),
+  chinese('중국어', 'zh');
+
+  final String label;
+  final String bcpCode;
+  const ComicSourceLanguage(this.label, this.bcpCode);
+}
+
 class ViewerSettings {
   final ReadingDirection readingDirection;
   final ViewerMode viewerMode;
@@ -95,6 +128,11 @@ class ViewerSettings {
   final bool useVolumeKeysForPageTurn;
   final bool pdfDarkInvert;
 
+  // AI 만화 번역 설정
+  final ComicTranslationMode translationMode;
+  final ComicTranslationEngineType translationEngineType;
+  final ComicSourceLanguage translationSourceLang;
+
   const ViewerSettings({
     this.readingDirection = ReadingDirection.leftToRight,
     this.viewerMode = ViewerMode.singlePage,
@@ -117,6 +155,9 @@ class ViewerSettings {
     this.ebookFirstLineIndent = false,
     this.useVolumeKeysForPageTurn = true,
     this.pdfDarkInvert = false,
+    this.translationMode = ComicTranslationMode.off,
+    this.translationEngineType = ComicTranslationEngineType.onDevice,
+    this.translationSourceLang = ComicSourceLanguage.auto,
   });
 
   ViewerSettings copyWith({
@@ -141,6 +182,9 @@ class ViewerSettings {
     bool? ebookFirstLineIndent,
     bool? useVolumeKeysForPageTurn,
     bool? pdfDarkInvert,
+    ComicTranslationMode? translationMode,
+    ComicTranslationEngineType? translationEngineType,
+    ComicSourceLanguage? translationSourceLang,
   }) {
     return ViewerSettings(
       readingDirection: readingDirection ?? this.readingDirection,
@@ -164,6 +208,9 @@ class ViewerSettings {
       ebookFirstLineIndent: ebookFirstLineIndent ?? this.ebookFirstLineIndent,
       useVolumeKeysForPageTurn: useVolumeKeysForPageTurn ?? this.useVolumeKeysForPageTurn,
       pdfDarkInvert: pdfDarkInvert ?? this.pdfDarkInvert,
+      translationMode: translationMode ?? this.translationMode,
+      translationEngineType: translationEngineType ?? this.translationEngineType,
+      translationSourceLang: translationSourceLang ?? this.translationSourceLang,
     );
   }
 
@@ -189,6 +236,9 @@ class ViewerSettings {
         'ebookFirstLineIndent': ebookFirstLineIndent,
         'useVolumeKeysForPageTurn': useVolumeKeysForPageTurn,
         'pdfDarkInvert': pdfDarkInvert,
+        'translationMode': translationMode.name,
+        'translationEngineType': translationEngineType.name,
+        'translationSourceLang': translationSourceLang.name,
       };
 
   factory ViewerSettings.fromJson(Map<String, dynamic> json) => ViewerSettings(
@@ -234,5 +284,17 @@ class ViewerSettings {
         ebookFirstLineIndent: json['ebookFirstLineIndent'] as bool? ?? false,
         useVolumeKeysForPageTurn: json['useVolumeKeysForPageTurn'] as bool? ?? true,
         pdfDarkInvert: json['pdfDarkInvert'] as bool? ?? false,
+        translationMode: ComicTranslationMode.values.firstWhere(
+          (e) => e.name == json['translationMode'],
+          orElse: () => ComicTranslationMode.off,
+        ),
+        translationEngineType: ComicTranslationEngineType.values.firstWhere(
+          (e) => e.name == json['translationEngineType'],
+          orElse: () => ComicTranslationEngineType.onDevice,
+        ),
+        translationSourceLang: ComicSourceLanguage.values.firstWhere(
+          (e) => e.name == json['translationSourceLang'],
+          orElse: () => ComicSourceLanguage.auto,
+        ),
       );
 }

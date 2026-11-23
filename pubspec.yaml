@@ -58,6 +58,10 @@ dependencies:
   charset_converter: ^2.5.1
   fast_gbk: ^1.0.0
   pdfrx: ^2.11.0
+  google_mlkit_text_recognition: ^1.0.3
+  google_mlkit_translation: ^1.0.3
+  translator: ^1.0.4+1
+  image: ^4.13.1
 
 dev_dependencies:
   flutter_test:

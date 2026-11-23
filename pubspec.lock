@@ -13,10 +13,10 @@ packages:
     dependency: "direct main"
     description:
       name: archive
-      sha256: "3aa20c6b5617b632a1b7198dcca3d88065d37232485b9a6c6c14dc8f5357d279"
+      sha256: "2fda90592c0afd219c5e285618a98da835cd10df38372666093d25dfe457a2d0"
       url: "https://pub.dev"
     source: hosted
-    version: "4.4.0"
+    version: "4.7.1"
   args:
     dependency: transitive
     description:
@@ -317,6 +317,30 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.3.3+1"
+  google_mlkit_commons:
+    dependency: transitive
+    description:
+      name: google_mlkit_commons
+      sha256: "58b969da65027b6242afb38b944f5a0d3f6b90305b29d70b0cca3048a50b4263"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.3"
+  google_mlkit_text_recognition:
+    dependency: "direct main"
+    description:
+      name: google_mlkit_text_recognition
+      sha256: "546e3e40181af7166d539f44416ff592a88bd12de61625ad9f2ec7166624f12b"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.3"
+  google_mlkit_translation:
+    dependency: "direct main"
+    description:
+      name: google_mlkit_translation
+      sha256: fafe02e4df45ba6e35c9ad5c1b109e4a4b0b7ae65818593f92a6319cca256567
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.3"
   google_sign_in:
     dependency: "direct main"
     description:
@@ -382,13 +406,13 @@ packages:
     source: hosted
     version: "4.1.2"
   image:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: image
-      sha256: "677a295e8050dda81a489479c35c213f258337e2c2c88deaafd888b41efea65e"
+      sha256: bc13f61f0f5cb77936e78ae5dae3800f442718dac5d2bc4654f03c239230ed0c
       url: "https://pub.dev"
     source: hosted
-    version: "4.11.1"
+    version: "4.13.1"
   intl:
     dependency: "direct main"
     description:
@@ -986,6 +1010,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.7.12"
+  translator:
+    dependency: "direct main"
+    description:
+      name: translator
+      sha256: fb28ada8b29931f5142907bac62dda375b14a60a57ec72ed37b78e3e97a7047b
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.4+1"
   typed_data:
     dependency: transitive
     description:

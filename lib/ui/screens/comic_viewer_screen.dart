@@ -11,6 +11,7 @@ import '../../models/display_page_item.dart';
 import '../../models/media_item.dart';
 import '../../models/viewer_settings.dart';
 import '../../services/account_manager.dart';
+import '../../services/ai_translation/comic_translation_service.dart';
 import '../../services/cloud_history_sync_service.dart';
 import '../../services/cloud_service_interface.dart';
 import '../../services/comic_archive_service.dart';
@@ -23,6 +24,7 @@ import '../../utils/image_dimension_utils.dart';
 import '../../utils/manga_detection_utils.dart';
 import '../../utils/natural_sort_utils.dart';
 import '../widgets/comic_thumbnail_sheet.dart';
+import '../widgets/comic_translation_overlay.dart';
 import '../widgets/viewer_settings_dialog.dart';
 
 class ComicViewerScreen extends StatefulWidget {
@@ -94,6 +96,17 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
   bool _isFolderImageMode = false;
   String? _currentParentFolderId;
   String? _currentFolderName;
+  late ComicTranslationMode _lastTranslationMode;
+  late ComicTranslationEngineType _lastTranslationEngineType;
+  late ComicSourceLanguage _lastTranslationSourceLang;
+  int _lastTranslationNoticeSeq = 0;
+
+  String get _currentBookId {
+    final rawId = _isFolderImageMode
+        ? (_currentParentFolderId ?? _currentItem.parentId ?? _currentItem.id)
+        : _currentItem.id;
+    return '${widget.service.account.id}:$rawId';
+  }
 
   @override
   void initState() {
@@ -103,6 +116,18 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
     _currentFolderName = widget.currentFolderName;
     _currentPageIndex = widget.initialPage ?? 0;
     _pageController = PageController(initialPage: _currentPageIndex);
+
+    final initialSettings = ViewerSettingsService.instance.settings;
+    _lastTranslationMode = initialSettings.translationMode;
+    _lastTranslationEngineType = initialSettings.translationEngineType;
+    _lastTranslationSourceLang = initialSettings.translationSourceLang;
+    _lastTranslationNoticeSeq = ComicTranslationService.instance.noticeSequence;
+    ViewerSettingsService.instance.addListener(_onViewerSettingsChanged);
+    ComicTranslationService.instance.addListener(_onTranslationServiceChanged);
+    if (initialSettings.translationEngineType ==
+        ComicTranslationEngineType.cloudVision) {
+      unawaited(ComicTranslationService.instance.loadGeminiApiKey());
+    }
 
     _isFolderImageMode = !_currentItem.isComicArchive && _currentItem.isImage;
 
@@ -289,6 +314,7 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
             _currentPageIndex = first;
           });
           _saveReadingProgress();
+          _syncTranslationForCurrentPage();
         }
       }
     });
@@ -296,6 +322,9 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
 
   @override
   void dispose() {
+    ViewerSettingsService.instance.removeListener(_onViewerSettingsChanged);
+    ComicTranslationService.instance.removeListener(_onTranslationServiceChanged);
+    unawaited(ComicTranslationService.instance.onViewerDisposed(_currentBookId));
     _focusNode.dispose();
     _exitFullScreen();
     _toastTimer?.cancel();
@@ -508,6 +537,9 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
         // 3. 읽은 만화 히스토리용 표지 썸네일 비동기 캐싱
         _saveCoverThumbnailAsync();
 
+        // 4. AI 번역 모드 동기화 (자동 모드일 때 현재 페이지 + 다음 1~2페이지 Pre-fetch)
+        _syncTranslationForCurrentPage();
+
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (_pageController.hasClients) {
             final targetDisplay = DisplayPageBuilder.findDisplayIndex(_displayItems, _currentPageIndex);
@@ -607,6 +639,7 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
     });
     _saveReadingProgress();
     _preloadAdjacentPages(originalIdx);
+    _syncTranslationForCurrentPage();
   }
 
   void _jumpToPage(int originalIndex) {
@@ -630,6 +663,129 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
     }
     _saveReadingProgress();
     _preloadAdjacentPages(originalIndex);
+    _syncTranslationForCurrentPage();
+  }
+
+  void _onTranslationServiceChanged() {
+    if (!mounted) return;
+    final svc = ComicTranslationService.instance;
+    if (svc.noticeSequence != _lastTranslationNoticeSeq) {
+      _lastTranslationNoticeSeq = svc.noticeSequence;
+      final msg = svc.latestNoticeMessage;
+      if (msg != null && msg.isNotEmpty) {
+        _showModeToast(msg);
+      }
+    }
+  }
+
+  void _onViewerSettingsChanged() {
+    if (!mounted) return;
+    final settings = ViewerSettingsService.instance.settings;
+    final modeChanged = _lastTranslationMode != settings.translationMode;
+    final engineChanged =
+        _lastTranslationEngineType != settings.translationEngineType;
+    final langChanged = _lastTranslationSourceLang != settings.translationSourceLang;
+    _lastTranslationMode = settings.translationMode;
+    _lastTranslationEngineType = settings.translationEngineType;
+    _lastTranslationSourceLang = settings.translationSourceLang;
+
+    if (modeChanged) {
+      unawaited(ComicTranslationService.instance.onTranslationModeChanged(settings.translationMode));
+      if (settings.translationMode != ComicTranslationMode.off) {
+        _syncTranslationForCurrentPage();
+      }
+    } else if (engineChanged) {
+      unawaited(
+        ComicTranslationService.instance
+            .onEngineTypeChanged(settings.translationEngineType)
+            .then((_) {
+          if (mounted && settings.translationMode == ComicTranslationMode.auto) {
+            _syncTranslationForCurrentPage();
+          }
+        }),
+      );
+    } else if (langChanged && settings.translationMode == ComicTranslationMode.auto) {
+      _syncTranslationForCurrentPage();
+    }
+  }
+
+  List<ComicPage> _getCurrentVisiblePages() {
+    if (_pages.isEmpty) return const [];
+    final settings = ViewerSettingsService.instance.settings;
+    if (settings.viewerMode == ViewerMode.singlePage &&
+        _displayItems.isNotEmpty &&
+        _currentDisplayIndex >= 0 &&
+        _currentDisplayIndex < _displayItems.length) {
+      final item = _displayItems[_currentDisplayIndex];
+      return [
+        item.primaryPage,
+        if (item.type == DisplayItemType.spread && item.secondaryPage != null)
+          item.secondaryPage!,
+      ];
+    }
+    final safeIdx = _currentPageIndex.clamp(0, _pages.length - 1);
+    return [_pages[safeIdx]];
+  }
+
+  void _syncTranslationForCurrentPage() {
+    if (_pages.isEmpty || _isLoading) return;
+    final settings = ViewerSettingsService.instance.settings;
+    if (settings.translationMode == ComicTranslationMode.off) return;
+
+    final visible = _getCurrentVisiblePages();
+    final isRtl = settings.readingDirection == ReadingDirection.rightToLeft;
+    unawaited(
+      ComicTranslationService.instance
+          .onPagesVisible(
+        bookId: _currentBookId,
+        visiblePages: visible,
+        allPages: _pages,
+        mode: settings.translationMode,
+        sourceLanguage: settings.translationSourceLang,
+        isRightToLeftManga: isRtl,
+        engineType: settings.translationEngineType,
+      )
+          .then((unsupportedMsg) {
+        if (mounted && unsupportedMsg != null) {
+          _showModeToast(unsupportedMsg);
+        }
+      }),
+    );
+  }
+
+  Future<void> _triggerManualTranslation() async {
+    if (_pages.isEmpty || _isLoading) return;
+    final settings = ViewerSettingsService.instance.settings;
+    if (settings.translationMode == ComicTranslationMode.off) return;
+
+    final visible = _getCurrentVisiblePages();
+    final isRtl = settings.readingDirection == ReadingDirection.rightToLeft;
+    final unsupportedMsg = await ComicTranslationService.instance.translatePagesNow(
+      bookId: _currentBookId,
+      visiblePages: visible,
+      sourceLanguage: settings.translationSourceLang,
+      isRightToLeftManga: isRtl,
+      engineType: settings.translationEngineType,
+    );
+
+    if (!mounted) return;
+    if (unsupportedMsg != null) {
+      _showModeToast(unsupportedMsg);
+      return;
+    }
+
+    final hasAnyBubble = visible.any((p) {
+      final bubbles = ComicTranslationService.instance.getCachedBubblesSync(
+        _currentBookId,
+        p.index,
+        settings.translationSourceLang,
+        engineType: settings.translationEngineType,
+      );
+      return bubbles != null && bubbles.isNotEmpty;
+    });
+    if (!hasAnyBubble) {
+      _showModeToast('현재 페이지에서 번역할 대사를 찾지 못했습니다.');
+    }
   }
 
   void _startHideControlsTimer({Duration duration = const Duration(seconds: 4)}) {
@@ -914,6 +1070,56 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
                         ),
                       ),
 
+                    // 3.5. AI 말풍선 번역 진행 중 마이크로 인디케이터 (비침습적)
+                    Positioned(
+                      top: MediaQuery.of(context).padding.top + 60,
+                      right: 14,
+                      child: ListenableBuilder(
+                        listenable: ComicTranslationService.instance,
+                        builder: (context, _) {
+                          if (!ComicTranslationService.instance.isTranslatingAny ||
+                              settings.translationMode == ComicTranslationMode.off) {
+                            return const SizedBox.shrink();
+                          }
+                          return IgnorePointer(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.78),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: Colors.cyanAccent.withValues(alpha: 0.55),
+                                  width: 1,
+                                ),
+                              ),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  SizedBox(
+                                    width: 12,
+                                    height: 12,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.cyanAccent,
+                                    ),
+                                  ),
+                                  SizedBox(width: 6),
+                                  Text(
+                                    'AI 말풍선 번역 중...',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+
                     // 4. 하단 컨트롤 툴바 오버레이
                     if (_showControls && !_isLoading && _pages.isNotEmpty)
                       Positioned(
@@ -1149,6 +1355,9 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
         if (settings.viewerMode == ViewerMode.webtoon) {
           return GestureDetector(
             onTapUp: (details) => _handleViewerTap(details, settings, constraints),
+            onLongPress: settings.translationMode != ComicTranslationMode.off
+                ? _triggerManualTranslation
+                : null,
             child: ScrollablePositionedList.builder(
               itemScrollController: _itemScrollController,
               itemPositionsListener: _itemPositionsListener,
@@ -1194,6 +1403,9 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
               behavior: HitTestBehavior.translucent,
               onDoubleTapDown: (details) => _doubleTapDetails = details,
               onDoubleTap: () => _handleDoubleTap(index),
+              onLongPress: settings.translationMode != ComicTranslationMode.off
+                  ? _triggerManualTranslation
+                  : null,
               onTapUp: (details) {
                 final scale = controller.value.getMaxScaleOnAxis();
                 if (scale <= 1.05 && !_isZoomed) {
@@ -1293,13 +1505,23 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
                 return SizedBox(
                   width: displaySize.width,
                   height: displaySize.height,
-                  child: Image.memory(
-                    bytes,
-                    width: displaySize.width,
-                    height: displaySize.height,
-                    fit: fit,
-                    filterQuality: FilterQuality.medium,
-                    errorBuilder: (context, error, stackTrace) => _buildImageErrorWidget(index),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Image.memory(
+                        bytes,
+                        width: displaySize.width,
+                        height: displaySize.height,
+                        fit: fit,
+                        filterQuality: FilterQuality.medium,
+                        errorBuilder: (context, error, stackTrace) => _buildImageErrorWidget(index),
+                      ),
+                      ComicTranslationOverlay(
+                        bookId: _currentBookId,
+                        pageIndex: index,
+                        viewportMode: ComicOverlayViewportMode.fullPage,
+                      ),
+                    ],
                   ),
                 );
               }
@@ -1310,10 +1532,21 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
                 height: constraints.hasBoundedHeight ? constraints.maxHeight : null,
                 child: FittedBox(
                   fit: settings.fitSmallImages ? fit : BoxFit.scaleDown,
-                  child: Image.memory(
-                    bytes,
-                    filterQuality: FilterQuality.medium,
-                    errorBuilder: (context, error, stackTrace) => _buildImageErrorWidget(index),
+                  child: Stack(
+                    children: [
+                      Image.memory(
+                        bytes,
+                        filterQuality: FilterQuality.medium,
+                        errorBuilder: (context, error, stackTrace) => _buildImageErrorWidget(index),
+                      ),
+                      Positioned.fill(
+                        child: ComicTranslationOverlay(
+                          bookId: _currentBookId,
+                          pageIndex: index,
+                          viewportMode: ComicOverlayViewportMode.fullPage,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               );
@@ -1364,6 +1597,8 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
             isLeft: isLeft,
             fit: fit,
             fitSmallImages: settings.fitSmallImages,
+            bookId: _currentBookId,
+            pageIndex: index,
           );
         }
         return _buildLoadingPlaceholder();
@@ -1494,6 +1729,31 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
               ],
             ),
           ),
+          // AI 만화 번역 버튼 & 원본/번역 토글(눈 아이콘)
+          if (settingsService.settings.translationMode != ComicTranslationMode.off) ...[
+            IconButton(
+              icon: const Icon(Icons.translate, color: Colors.cyanAccent),
+              tooltip: '현재 페이지 번역 (또는 화면 길게 누르기)',
+              onPressed: _triggerManualTranslation,
+            ),
+            AnimatedBuilder(
+              animation: ComicTranslationService.instance,
+              builder: (context, _) {
+                final isVisible = ComicTranslationService.instance.isOverlayVisible;
+                return IconButton(
+                  icon: Icon(
+                    isVisible ? Icons.visibility : Icons.visibility_off,
+                    color: isVisible ? Colors.cyanAccent : Colors.white54,
+                  ),
+                  tooltip: isVisible ? '원본 그림 보기 (번역 숨김)' : '번역 오버레이 보기',
+                  onPressed: () {
+                    ComicTranslationService.instance.toggleOverlayVisibility();
+                    _showModeToast(isVisible ? '원본 그림 표시' : '번역 오버레이 표시');
+                  },
+                );
+              },
+            ),
+          ],
           // 보기 모드 (자동 / 분할 / 합침 / 1페이지) 토글 버튼
           IconButton(
             icon: Icon(
@@ -1729,6 +1989,8 @@ class SplitImageView extends StatefulWidget {
   final bool isLeft;
   final BoxFit fit;
   final bool fitSmallImages;
+  final String bookId;
+  final int pageIndex;
 
   const SplitImageView({
     super.key,
@@ -1736,6 +1998,8 @@ class SplitImageView extends StatefulWidget {
     required this.isLeft,
     required this.fit,
     this.fitSmallImages = true,
+    required this.bookId,
+    required this.pageIndex,
   });
 
   @override
@@ -1785,14 +2049,37 @@ class _SplitImageViewState extends State<SplitImageView> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        return CustomPaint(
-          size: Size(constraints.maxWidth, constraints.maxHeight),
-          painter: SplitImagePainter(
-            image: _image!,
-            isLeft: widget.isLeft,
-            fit: widget.fit,
-            fitSmallImages: widget.fitSmallImages,
-          ),
+        final canvasSize = Size(constraints.maxWidth, constraints.maxHeight);
+        final dstRect = SplitImagePainter.computeDstRect(
+          image: _image!,
+          canvasSize: canvasSize,
+          fit: widget.fit,
+          fitSmallImages: widget.fitSmallImages,
+        );
+
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            CustomPaint(
+              size: canvasSize,
+              painter: SplitImagePainter(
+                image: _image!,
+                isLeft: widget.isLeft,
+                fit: widget.fit,
+                fitSmallImages: widget.fitSmallImages,
+              ),
+            ),
+            Positioned.fromRect(
+              rect: dstRect,
+              child: ComicTranslationOverlay(
+                bookId: widget.bookId,
+                pageIndex: widget.pageIndex,
+                viewportMode: widget.isLeft
+                    ? ComicOverlayViewportMode.splitLeftHalf
+                    : ComicOverlayViewportMode.splitRightHalf,
+              ),
+            ),
+          ],
         );
       },
     );
@@ -1812,6 +2099,33 @@ class SplitImagePainter extends CustomPainter {
     this.fitSmallImages = true,
   });
 
+  static Rect computeDstRect({
+    required ui.Image image,
+    required Size canvasSize,
+    required BoxFit fit,
+    required bool fitSmallImages,
+  }) {
+    final imgW = image.width.toDouble();
+    final imgH = image.height.toDouble();
+    final halfW = imgW / 2;
+
+    final targetFit = fitSmallImages
+        ? fit
+        : (halfW > canvasSize.width || imgH > canvasSize.height ? fit : BoxFit.none);
+
+    final Size dstSize;
+    if (targetFit == BoxFit.none) {
+      dstSize = Size(halfW, imgH);
+    } else {
+      final fittedSizes = applyBoxFit(targetFit, Size(halfW, imgH), canvasSize);
+      dstSize = fittedSizes.destination;
+    }
+
+    final dx = (canvasSize.width - dstSize.width) / 2;
+    final dy = (canvasSize.height - dstSize.height) / 2;
+    return Rect.fromLTWH(dx, dy, dstSize.width, dstSize.height);
+  }
+
   @override
   void paint(Canvas canvas, Size size) {
     final imgW = image.width.toDouble();
@@ -1824,21 +2138,12 @@ class SplitImagePainter extends CustomPainter {
         : Rect.fromLTWH(halfW, 0, halfW, imgH);
 
     // 2. 화면 영역(size)에 절반 페이지 종횡비를 맞춤
-    final targetFit = fitSmallImages
-        ? fit
-        : (halfW > size.width || imgH > size.height ? fit : BoxFit.none);
-
-    final Size dstSize;
-    if (targetFit == BoxFit.none) {
-      dstSize = Size(halfW, imgH);
-    } else {
-      final fittedSizes = applyBoxFit(targetFit, Size(halfW, imgH), size);
-      dstSize = fittedSizes.destination;
-    }
-
-    final dx = (size.width - dstSize.width) / 2;
-    final dy = (size.height - dstSize.height) / 2;
-    final dstRect = Rect.fromLTWH(dx, dy, dstSize.width, dstSize.height);
+    final dstRect = computeDstRect(
+      image: image,
+      canvasSize: size,
+      fit: fit,
+      fitSmallImages: fitSmallImages,
+    );
 
     canvas.drawImageRect(
       image,
