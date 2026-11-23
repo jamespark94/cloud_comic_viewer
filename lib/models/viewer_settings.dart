@@ -83,8 +83,18 @@ enum ComicTranslationMode {
 
 /// AI 만화 번역 엔진 타입
 enum ComicTranslationEngineType {
-  onDevice('로컬 무료 모드', '온디바이스 OCR + 무료 번역'),
-  cloudVision('클라우드 고품질 모드', 'Gemini 멀티모달 Vision AI');
+  onDevice(
+    '로컬 오프라인 (완전 무료 / ML Kit)',
+    '인터넷 없이 온디바이스 OCR + ML Kit 오프라인 번역',
+  ),
+  freeGoogle(
+    '온라인 무료 (무제한 / 로컬 OCR + 구글 번역)',
+    '기본 추천 · 로컬 OCR + 무료 구글 웹 배치 번역',
+  ),
+  cloudVision(
+    '클라우드 AI (최고 품질 / Gemini 토큰 소모)',
+    '최고 품질 · Gemini 멀티모달 Vision AI',
+  );
 
   final String label;
   final String description;
@@ -156,7 +166,7 @@ class ViewerSettings {
     this.useVolumeKeysForPageTurn = true,
     this.pdfDarkInvert = false,
     this.translationMode = ComicTranslationMode.off,
-    this.translationEngineType = ComicTranslationEngineType.onDevice,
+    this.translationEngineType = ComicTranslationEngineType.freeGoogle,
     this.translationSourceLang = ComicSourceLanguage.auto,
   });
 
@@ -290,7 +300,7 @@ class ViewerSettings {
         ),
         translationEngineType: ComicTranslationEngineType.values.firstWhere(
           (e) => e.name == json['translationEngineType'],
-          orElse: () => ComicTranslationEngineType.onDevice,
+          orElse: () => ComicTranslationEngineType.freeGoogle,
         ),
         translationSourceLang: ComicSourceLanguage.values.firstWhere(
           (e) => e.name == json['translationSourceLang'],

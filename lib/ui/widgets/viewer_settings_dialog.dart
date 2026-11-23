@@ -451,52 +451,106 @@ class _AiComicTranslationSectionState extends State<_AiComicTranslationSection> 
                 ),
               ),
               const SizedBox(height: 6),
-              Wrap(
-                spacing: 8,
-                runSpacing: 6,
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  for (final engineType in ComicTranslationEngineType.values)
-                    ChoiceChip(
-                      label: Text(
-                        engineType.label,
-                        style: TextStyle(
-                          fontSize: 11.5,
-                          color: settings.translationEngineType == engineType
-                              ? Colors.black
-                              : Colors.white70,
-                          fontWeight:
-                              settings.translationEngineType == engineType
-                                  ? FontWeight.w700
-                                  : FontWeight.normal,
-                        ),
-                      ),
-                      selected: settings.translationEngineType == engineType,
-                      selectedColor: Colors.cyanAccent,
-                      backgroundColor: const Color(0xFF252C3B),
-                      side: BorderSide(
-                        color: settings.translationEngineType == engineType
-                            ? Colors.cyanAccent
-                            : Colors.white12,
-                      ),
-                      visualDensity: VisualDensity.compact,
-                      onSelected: (selected) async {
-                        if (!selected ||
-                            settings.translationEngineType == engineType) {
-                          return;
-                        }
-                        if (engineType ==
-                            ComicTranslationEngineType.cloudVision) {
-                          await translationService.loadGeminiApiKey();
-                        }
-                        await widget.settingsService
-                            .setTranslationEngineType(engineType);
+                  for (final engineType in ComicTranslationEngineType.values) ...[
+                    Builder(
+                      builder: (context) {
+                        final isSelected =
+                            settings.translationEngineType == engineType;
+                        final isRecommended =
+                            engineType == ComicTranslationEngineType.freeGoogle;
+                        return InkWell(
+                          borderRadius: BorderRadius.circular(8),
+                          onTap: () async {
+                            if (isSelected) return;
+                            if (engineType ==
+                                ComicTranslationEngineType.cloudVision) {
+                              await translationService.loadGeminiApiKey();
+                            }
+                            await widget.settingsService
+                                .setTranslationEngineType(engineType);
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: isSelected
+                                  ? Colors.cyanAccent.withValues(alpha: 0.14)
+                                  : const Color(0xFF252C3B),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: isSelected
+                                    ? Colors.cyanAccent
+                                    : Colors.white12,
+                                width: isSelected ? 1.4 : 1,
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  isSelected
+                                      ? Icons.radio_button_checked
+                                      : Icons.radio_button_unchecked,
+                                  size: 16,
+                                  color: isSelected
+                                      ? Colors.cyanAccent
+                                      : Colors.white38,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    engineType.label,
+                                    style: TextStyle(
+                                      fontSize: 11.5,
+                                      color: isSelected
+                                          ? Colors.cyanAccent
+                                          : Colors.white70,
+                                      fontWeight: isSelected
+                                          ? FontWeight.w700
+                                          : FontWeight.normal,
+                                    ),
+                                  ),
+                                ),
+                                if (isRecommended) ...[
+                                  const SizedBox(width: 6),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                      vertical: 2,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.cyanAccent
+                                          .withValues(alpha: 0.18),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: const Text(
+                                      '추천',
+                                      style: TextStyle(
+                                        fontSize: 9.5,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.cyanAccent,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        );
                       },
                     ),
+                    if (engineType != ComicTranslationEngineType.values.last)
+                      const SizedBox(height: 6),
+                  ],
                 ],
               ),
               if (!isCloud &&
                   !translationService
-                      .isEngineSupportedFor(ComicTranslationEngineType.onDevice)) ...[
+                      .isEngineSupportedFor(settings.translationEngineType)) ...[
                 const SizedBox(height: 8),
                 Container(
                   width: double.infinity,
@@ -516,8 +570,8 @@ class _AiComicTranslationSectionState extends State<_AiComicTranslationSection> 
                       Expanded(
                         child: Text(
                           translationService.unsupportedReasonFor(
-                                  ComicTranslationEngineType.onDevice) ??
-                              '현재 환경에서는 로컬 무료 모드가 지원되지 않습니다.',
+                                  settings.translationEngineType) ??
+                              '현재 환경에서는 선택한 번역 엔진이 지원되지 않습니다.',
                           style: const TextStyle(
                               color: Colors.amberAccent, fontSize: 11),
                         ),

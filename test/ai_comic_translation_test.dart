@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
@@ -14,6 +16,8 @@ import 'package:cloud_comic_viewer/services/ai_translation/comic_translation_key
 import 'package:cloud_comic_viewer/services/ai_translation/comic_translation_service.dart';
 import 'package:cloud_comic_viewer/services/ai_translation/comic_translator_engine.dart';
 import 'package:cloud_comic_viewer/services/ai_translation/engines/cloud_vision_comic_translator.dart';
+import 'package:cloud_comic_viewer/services/ai_translation/engines/free_google_comic_translator.dart';
+import 'package:cloud_comic_viewer/services/ai_translation/engines/on_device_comic_translator.dart';
 import 'package:cloud_comic_viewer/services/ai_translation/engines/platform_translator_factory.dart';
 import 'package:cloud_comic_viewer/ui/widgets/comic_translation_overlay.dart';
 
@@ -103,15 +107,15 @@ Uint8List _minimalPng10x10() {
 
 void main() {
   group('ViewerSettings translation serialization', () {
-    test('defaults to OFF and preserves backward compatibility', () {
+    test('defaults to OFF and freeGoogle recommended engine with backward compatibility', () {
       const defaults = ViewerSettings();
       expect(defaults.translationMode, ComicTranslationMode.off);
-      expect(defaults.translationEngineType, ComicTranslationEngineType.onDevice);
+      expect(defaults.translationEngineType, ComicTranslationEngineType.freeGoogle);
       expect(defaults.translationSourceLang, ComicSourceLanguage.auto);
 
       final legacy = ViewerSettings.fromJson({'keepScreenOn': false});
       expect(legacy.translationMode, ComicTranslationMode.off);
-      expect(legacy.translationEngineType, ComicTranslationEngineType.onDevice);
+      expect(legacy.translationEngineType, ComicTranslationEngineType.freeGoogle);
       expect(legacy.translationSourceLang, ComicSourceLanguage.auto);
 
       final updated = defaults.copyWith(
@@ -189,6 +193,171 @@ void main() {
       expect(clustered.length, 1);
       expect(clustered.first.mergedText, 'Hello world!');
       expect(clustered.first.isVertical, isFalse);
+    });
+
+    test('joins horizontal Japanese/Chinese without spaces and Spanish with spaces', () {
+      // 가로쓰기 일본어 (구두점 경계 + 내부 줄바꿈 포함) -> 공백 없이 연결
+      final jpLines = [
+        const OcrTextLine(
+          text: '待って、\n本当に',
+          boundingBox: Rect.fromLTRB(100, 100, 260, 130),
+        ),
+        const OcrTextLine(
+          text: '「行くよ！」',
+          boundingBox: Rect.fromLTRB(105, 136, 255, 166),
+        ),
+      ];
+      final jpClustered = BubbleClusterer.clusterLines(
+        lines: jpLines,
+        imageWidth: 800,
+        imageHeight: 1200,
+        preferVerticalRtl: false,
+        sourceLanguage: ComicSourceLanguage.japanese,
+      );
+      expect(jpClustered.length, 1);
+      expect(jpClustered.first.mergedText, '待って、本当に「行くよ！」');
+
+      // 가로쓰기 중국어 -> 공백 없이 연결
+      final zhLines = [
+        const OcrTextLine(
+          text: '你 好，',
+          boundingBox: Rect.fromLTRB(100, 200, 220, 230),
+        ),
+        const OcrTextLine(
+          text: '准备好了吗？',
+          boundingBox: Rect.fromLTRB(100, 236, 240, 266),
+        ),
+      ];
+      final zhClustered = BubbleClusterer.clusterLines(
+        lines: zhLines,
+        imageWidth: 800,
+        imageHeight: 1200,
+        preferVerticalRtl: false,
+        sourceLanguage: ComicSourceLanguage.chinese,
+      );
+      expect(zhClustered.length, 1);
+      expect(zhClustered.first.mergedText, '你好，准备好了吗？');
+
+      // 스페인어 (특수문자 ¡¿ 및 악센트 포함) -> 공백 연결
+      final esLines = [
+        const OcrTextLine(
+          text: '¡Hola,',
+          boundingBox: Rect.fromLTRB(100, 300, 200, 326),
+        ),
+        const OcrTextLine(
+          text: '¿cómo estás?',
+          boundingBox: Rect.fromLTRB(102, 332, 240, 358),
+        ),
+      ];
+      final esClustered = BubbleClusterer.clusterLines(
+        lines: esLines,
+        imageWidth: 800,
+        imageHeight: 1200,
+        preferVerticalRtl: false,
+      );
+      expect(esClustered.length, 1);
+      expect(esClustered.first.mergedText, '¡Hola, ¿cómo estás?');
+    });
+
+    test('sorts multi-column vertical Japanese strictly right-to-left (largest X first) and top-to-bottom', () {
+      final lines = [
+        // 가장 왼쪽 열 (3번째로 읽어야 함)
+        const OcrTextLine(
+          text: '天気だ',
+          boundingBox: Rect.fromLTRB(480, 110, 510, 230),
+        ),
+        // 가장 오른쪽 열 상단 (1번째)
+        const OcrTextLine(
+          text: '今日',
+          boundingBox: Rect.fromLTRB(580, 100, 610, 180),
+        ),
+        // 가장 오른쪽 열 하단 (2번째)
+        const OcrTextLine(
+          text: 'は',
+          boundingBox: Rect.fromLTRB(582, 186, 610, 214),
+        ),
+        // 가운데 열 (2번째 열)
+        const OcrTextLine(
+          text: 'いい',
+          boundingBox: Rect.fromLTRB(530, 105, 560, 195),
+        ),
+      ];
+
+      // preferVerticalRtl이 false여도 일본어 세로쓰기 열이면 우->좌 정렬
+      final clustered = BubbleClusterer.clusterLines(
+        lines: lines,
+        imageWidth: 1000,
+        imageHeight: 1400,
+        preferVerticalRtl: false,
+      );
+
+      expect(clustered.length, 1);
+      expect(clustered.first.isVertical, isTrue);
+      expect(clustered.first.mergedText, '今日はいい天気だ');
+    });
+
+    test('cleans OCR symbol artifacts and standalone single-character noise while preserving valid text', () {
+      final lines = [
+        // 말풍선 테두리/기호 노이즈가 섞인 일본어 라인 + 옆에 붙은 단일 ASCII 노이즈
+        const OcrTextLine(
+          text: '| ■ 今日',
+          boundingBox: Rect.fromLTRB(540, 100, 570, 200),
+        ),
+        const OcrTextLine(
+          text: '行くぞ □',
+          boundingBox: Rect.fromLTRB(500, 105, 530, 210),
+        ),
+        const OcrTextLine(
+          text: 'l',
+          boundingBox: Rect.fromLTRB(480, 110, 492, 160),
+        ),
+        // 6x6보다 큰 독립 단일 ASCII 노이즈 -> 제거되어야 함
+        const OcrTextLine(
+          text: 'a',
+          boundingBox: Rect.fromLTRB(100, 100, 116, 120),
+        ),
+        // 기호 노이즈만 남은 라인 -> 제거되어야 함
+        const OcrTextLine(
+          text: '| ■ --- • |',
+          boundingBox: Rect.fromLTRB(200, 200, 260, 230),
+        ),
+        // 정상 1글자 일본어 말풍선은 보존
+        const OcrTextLine(
+          text: 'え',
+          boundingBox: Rect.fromLTRB(300, 400, 330, 430),
+        ),
+      ];
+
+      final clustered = BubbleClusterer.clusterLines(
+        lines: lines,
+        imageWidth: 1000,
+        imageHeight: 1400,
+        preferVerticalRtl: true,
+      );
+
+      expect(clustered.length, 2);
+      expect(clustered[0].mergedText, '今日行くぞ');
+      expect(clustered[1].mergedText, 'え');
+
+      // 영어 문장 내의 단독 라인 'I'는 주변 라인과 병합되어 보존되어야 함
+      final enLines = [
+        const OcrTextLine(
+          text: 'I',
+          boundingBox: Rect.fromLTRB(100, 100, 120, 124),
+        ),
+        const OcrTextLine(
+          text: 'know!',
+          boundingBox: Rect.fromLTRB(100, 130, 200, 154),
+        ),
+      ];
+      final enClustered = BubbleClusterer.clusterLines(
+        lines: enLines,
+        imageWidth: 800,
+        imageHeight: 1200,
+        preferVerticalRtl: false,
+      );
+      expect(enClustered.length, 1);
+      expect(enClustered.first.mergedText, 'I know!');
     });
   });
 
@@ -667,6 +836,336 @@ void main() {
       expect(storage.hasCachedApiKey, isFalse);
     });
   });
+
+  group('FreeGoogleComicTranslator hybrid pipeline & fallback', () {
+    test('batches multiple bubbles into a single HTTP GET request with delimiter', () async {
+      final recordedRequests = <RequestOptions>[];
+      final dio = Dio();
+      dio.httpClientAdapter = _MockHttpClientAdapter((options) async {
+        recordedRequests.add(options);
+        final payload = jsonEncode([
+          [
+            ['안녕!\n', 'Hello!\n', null, null],
+            ['|||\n', '|||\n', null, null],
+            ['오늘 날씨가 좋네', 'Nice weather today', null, null],
+          ],
+          null,
+          'en',
+        ]);
+        return ResponseBody.fromString(
+          payload,
+          200,
+          headers: {
+            Headers.contentTypeHeader: [Headers.jsonContentType],
+          },
+        );
+      });
+
+      final extractorCalls = <int>[];
+      final engine = FreeGoogleComicTranslator(
+        dio: dio,
+        isSupportedOverride: true,
+        bubbleExtractor: (request) async {
+          extractorCalls.add(request.pageIndex);
+          return const [
+            ExtractedBubbleCandidate(
+              cluster: ClusteredBubble(
+                pixelRect: Rect.fromLTRB(10, 10, 100, 50),
+                normalizedRect: Rect.fromLTRB(0.1, 0.1, 0.5, 0.25),
+                mergedText: 'Hello!',
+                isVertical: false,
+              ),
+              colors: BubbleColors(
+                backgroundColor: Color(0xFFFCFCFC),
+                textColor: Color(0xFF141414),
+              ),
+              detectedLanguageCode: 'en',
+            ),
+            ExtractedBubbleCandidate(
+              cluster: ClusteredBubble(
+                pixelRect: Rect.fromLTRB(10, 60, 100, 100),
+                normalizedRect: Rect.fromLTRB(0.2, 0.4, 0.8, 0.6),
+                mergedText: '이미 한국어',
+                isVertical: false,
+              ),
+              colors: BubbleColors(
+                backgroundColor: Color(0xFFFCFCFC),
+                textColor: Color(0xFF141414),
+              ),
+              detectedLanguageCode: 'ko',
+            ),
+            ExtractedBubbleCandidate(
+              cluster: ClusteredBubble(
+                pixelRect: Rect.fromLTRB(10, 110, 100, 160),
+                normalizedRect: Rect.fromLTRB(0.3, 0.7, 0.9, 0.9),
+                mergedText: 'Nice weather today',
+                isVertical: true,
+              ),
+              colors: BubbleColors(
+                backgroundColor: Color(0xFF141414),
+                textColor: Color(0xFFF5F5F5),
+              ),
+              detectedLanguageCode: 'en',
+            ),
+          ];
+        },
+      );
+
+      final bubbles = await engine.translatePage(
+        ComicPageTranslationRequest(
+          bookId: 'free_book',
+          pageIndex: 0,
+          imageBytes: _minimalPng10x10(),
+          imageWidth: 200,
+          imageHeight: 200,
+          sourceLanguage: ComicSourceLanguage.english,
+          targetLanguage: 'ko',
+          isRightToLeftManga: false,
+        ),
+      );
+
+      expect(extractorCalls, [0]);
+      // 페이지당 정확히 1회의 HTTP GET 요청만 수행
+      expect(recordedRequests.length, 1);
+      final req = recordedRequests.first;
+      expect(req.method, 'GET');
+      expect(req.uri.host, 'translate.googleapis.com');
+      expect(req.uri.path, '/translate_a/single');
+      expect(req.queryParameters['client'], 'gtx');
+      expect(req.queryParameters['sl'], 'en');
+      expect(req.queryParameters['tl'], 'ko');
+      expect(
+        req.queryParameters['q'],
+        'Hello!${FreeGoogleComicTranslator.batchDelimiter}Nice weather today',
+      );
+
+      // 한국어 말풍선은 건너뛰고 번역 대상 2개만 좌표와 매핑
+      expect(bubbles.length, 2);
+      expect(bubbles[0].normalizedRect, const Rect.fromLTRB(0.1, 0.1, 0.5, 0.25));
+      expect(bubbles[0].originalText, 'Hello!');
+      expect(bubbles[0].translatedText, '안녕!');
+      expect(bubbles[0].isVerticalSource, isFalse);
+
+      expect(bubbles[1].normalizedRect, const Rect.fromLTRB(0.3, 0.7, 0.9, 0.9));
+      expect(bubbles[1].originalText, 'Nice weather today');
+      expect(bubbles[1].translatedText, '오늘 날씨가 좋네');
+      expect(bubbles[1].backgroundColor, const Color(0xFF141414));
+      expect(bubbles[1].textColor, const Color(0xFFF5F5F5));
+      expect(bubbles[1].isVerticalSource, isTrue);
+      expect(engine.lastRunUsedFallback, isFalse);
+    });
+
+    test('falls back automatically to offline engine when network fails or rate-limited', () async {
+      final dio = Dio();
+      dio.httpClientAdapter = _MockHttpClientAdapter((options) async {
+        throw DioException(
+          requestOptions: options,
+          type: DioExceptionType.connectionError,
+          message: 'SocketException: Network is unreachable',
+        );
+      });
+
+      final offlineFallback = _FakeComicTranslatorEngine();
+      final notices = <String>[];
+      final engine = FreeGoogleComicTranslator(
+        dio: dio,
+        isSupportedOverride: true,
+        fallbackEngine: offlineFallback,
+        onNotice: notices.add,
+        bubbleExtractor: (_) async => const [
+          ExtractedBubbleCandidate(
+            cluster: ClusteredBubble(
+              pixelRect: Rect.fromLTRB(10, 10, 80, 80),
+              normalizedRect: Rect.fromLTRB(0.1, 0.1, 0.4, 0.4),
+              mergedText: 'おはよう',
+              isVertical: true,
+            ),
+            colors: BubbleColors(
+              backgroundColor: Colors.white,
+              textColor: Color(0xFF141414),
+            ),
+            detectedLanguageCode: 'ja',
+          ),
+        ],
+      );
+
+      final result = await engine.translatePage(
+        ComicPageTranslationRequest(
+          bookId: 'offline_book',
+          pageIndex: 4,
+          imageBytes: _minimalPng10x10(),
+          imageWidth: 100,
+          imageHeight: 100,
+          sourceLanguage: ComicSourceLanguage.japanese,
+        ),
+      );
+
+      expect(engine.lastRunUsedFallback, isTrue);
+      expect(offlineFallback.translatedPageIndices, [4]);
+      expect(result.length, 1);
+      expect(result.first.translatedText, '테스트4');
+      expect(notices, isNotEmpty);
+    });
+
+    test('cleans OCR noise and applies language-specific newline joining before batching with |||', () async {
+      final recordedRequests = <RequestOptions>[];
+      final dio = Dio();
+      dio.httpClientAdapter = _MockHttpClientAdapter((options) async {
+        recordedRequests.add(options);
+        final payload = jsonEncode([
+          [
+            ['안녕 세계!\n', 'Hello world!\n', null, null],
+            ['|||\n', '|||\n', null, null],
+            ['오늘 갈게!', '今日行くぞ！', null, null],
+          ],
+        ]);
+        return ResponseBody.fromString(
+          payload,
+          200,
+          headers: {
+            Headers.contentTypeHeader: [Headers.jsonContentType],
+          },
+        );
+      });
+
+      final engine = FreeGoogleComicTranslator(
+        dio: dio,
+        isSupportedOverride: true,
+        bubbleExtractor: (_) async => const [
+          ExtractedBubbleCandidate(
+            cluster: ClusteredBubble(
+              pixelRect: Rect.fromLTRB(10, 10, 120, 60),
+              normalizedRect: Rect.fromLTRB(0.1, 0.1, 0.5, 0.25),
+              mergedText: '| ■ Hello\nworld! ||| □',
+              isVertical: false,
+            ),
+            colors: BubbleColors(
+              backgroundColor: Colors.white,
+              textColor: Color(0xFF141414),
+            ),
+            detectedLanguageCode: 'en',
+          ),
+          // 정제 후 노이즈만 남는 후보는 배치에서 제외되어 구분자 매핑이 깨지지 않아야 함
+          ExtractedBubbleCandidate(
+            cluster: ClusteredBubble(
+              pixelRect: Rect.fromLTRB(10, 70, 50, 90),
+              normalizedRect: Rect.fromLTRB(0.1, 0.3, 0.2, 0.4),
+              mergedText: '| • l ■ |',
+              isVertical: false,
+            ),
+            colors: BubbleColors(
+              backgroundColor: Colors.white,
+              textColor: Color(0xFF141414),
+            ),
+            detectedLanguageCode: 'ja',
+          ),
+          ExtractedBubbleCandidate(
+            cluster: ClusteredBubble(
+              pixelRect: Rect.fromLTRB(140, 10, 180, 160),
+              normalizedRect: Rect.fromLTRB(0.6, 0.1, 0.9, 0.8),
+              mergedText: '今日\n行くぞ！ □',
+              isVertical: true,
+            ),
+            colors: BubbleColors(
+              backgroundColor: Colors.white,
+              textColor: Color(0xFF141414),
+            ),
+            detectedLanguageCode: 'ja',
+          ),
+        ],
+      );
+
+      final bubbles = await engine.translatePage(
+        ComicPageTranslationRequest(
+          bookId: 'noise_cleanup_book',
+          pageIndex: 0,
+          imageBytes: _minimalPng10x10(),
+          imageWidth: 200,
+          imageHeight: 200,
+          sourceLanguage: ComicSourceLanguage.auto,
+          targetLanguage: 'ko',
+        ),
+      );
+
+      expect(recordedRequests.length, 1);
+      expect(
+        recordedRequests.first.queryParameters['q'],
+        'Hello world!${FreeGoogleComicTranslator.batchDelimiter}今日行くぞ！',
+      );
+      expect(bubbles.length, 2);
+      expect(bubbles[0].originalText, 'Hello world!');
+      expect(bubbles[0].translatedText, '안녕 세계!');
+      expect(bubbles[1].originalText, '今日行くぞ！');
+      expect(bubbles[1].translatedText, '오늘 갈게!');
+    });
+
+    test('ComicTranslationService routes freeGoogle engineType and isolates cache', () async {
+      final tempDir = await Directory.systemTemp.createTemp('comic_free_svc_');
+      try {
+        final fakeFree = _FakeComicTranslatorEngine();
+        final fakeOnDevice = _FakeComicTranslatorEngine();
+        final service = ComicTranslationService.forTesting(
+          engine: fakeOnDevice,
+          freeGoogleEngine: fakeFree,
+          cache: ComicTranslationCache(cacheDirProvider: () async => tempDir),
+        );
+
+        final page = ComicPage(
+          index: 0,
+          name: '0.png',
+          initialBytes: _minimalPng10x10(),
+        );
+
+        await service.translatePagesNow(
+          bookId: 'book_hybrid',
+          visiblePages: [page],
+          sourceLanguage: ComicSourceLanguage.japanese,
+          isRightToLeftManga: true,
+          engineType: ComicTranslationEngineType.freeGoogle,
+        );
+
+        expect(fakeFree.translatedPageIndices, [0]);
+        expect(fakeOnDevice.translatedPageIndices, isEmpty);
+        expect(
+          service.hasCachedResultSync(
+            'book_hybrid',
+            0,
+            ComicSourceLanguage.japanese,
+            engineType: ComicTranslationEngineType.freeGoogle,
+          ),
+          isTrue,
+        );
+        expect(
+          service.hasCachedResultSync(
+            'book_hybrid',
+            0,
+            ComicSourceLanguage.japanese,
+            engineType: ComicTranslationEngineType.onDevice,
+          ),
+          isFalse,
+        );
+      } finally {
+        await tempDir.delete(recursive: true);
+      }
+    });
+  });
+}
+
+class _MockHttpClientAdapter implements HttpClientAdapter {
+  final Future<ResponseBody> Function(RequestOptions options) handler;
+
+  _MockHttpClientAdapter(this.handler);
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) =>
+      handler(options);
+
+  @override
+  void close({bool force = false}) {}
 }
 
 extension on TranslatedBubble {

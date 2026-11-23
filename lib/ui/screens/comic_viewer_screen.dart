@@ -1044,7 +1044,8 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
                     // 3. 중앙 모드 변경 토스트 오버레이
                     if (_toastMessage != null)
                       Positioned(
-                        top: MediaQuery.of(context).padding.top + 64,
+                        top: MediaQuery.of(context).padding.top +
+                            (_showControls && MediaQuery.of(context).size.width < 640 ? 114 : 64),
                         left: 0,
                         right: 0,
                         child: Center(
@@ -1072,7 +1073,8 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
 
                     // 3.5. AI 말풍선 번역 진행 중 마이크로 인디케이터 (비침습적)
                     Positioned(
-                      top: MediaQuery.of(context).padding.top + 60,
+                      top: MediaQuery.of(context).padding.top +
+                          (_showControls && MediaQuery.of(context).size.width < 640 ? 110 : 60),
                       right: 14,
                       child: ListenableBuilder(
                         listenable: ComicTranslationService.instance,
@@ -1654,180 +1656,240 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
         ? _displayItems[_currentDisplayIndex].label
         : '${_currentPageIndex + 1}p';
 
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Colors.black87, Colors.transparent],
-        ),
-      ),
-      padding: EdgeInsets.only(
-        top: MediaQuery.of(context).padding.top + 8,
-        left: 8,
-        right: 8,
-        bottom: 16,
-      ),
-      child: Row(
-        children: [
-          IconButton(
-            icon: const Icon(Icons.arrow_back, color: Colors.white),
-            onPressed: () => Navigator.pop(context),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact = constraints.maxWidth < 640;
+        final backButton = IconButton(
+          visualDensity: isCompact ? VisualDensity.compact : null,
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () => Navigator.pop(context),
+        );
+        final titleSection = _buildTopBarTitleSection(settingsService, pageLabel);
+
+        return Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: isCompact
+                  ? const [Colors.black87, Colors.black54, Colors.transparent]
+                  : const [Colors.black87, Colors.transparent],
+              stops: isCompact ? const [0.0, 0.72, 1.0] : null,
+            ),
           ),
-          const SizedBox(width: 4),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
+          padding: EdgeInsets.only(
+            top: MediaQuery.of(context).padding.top + 8,
+            left: 8,
+            right: 8,
+            bottom: isCompact ? 12 : 16,
+          ),
+          child: isCompact
+              ? Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Flexible(
-                      child: Text(
-                        _isFolderImageMode
-                            ? (_currentFolderName != null
-                                ? '$_currentFolderName (${_currentItem.name})'
-                                : _currentItem.name)
-                            : _currentItem.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
+                    Row(
+                      children: [
+                        backButton,
+                        const SizedBox(width: 4),
+                        Expanded(child: titleSection),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: _buildTopBarActions(settingsService, compact: true),
                         ),
                       ),
                     ),
-                    if (_isStreamed) ...[
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Colors.blueAccent.withValues(alpha: 0.8),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.bolt, color: Colors.yellowAccent, size: 12),
-                            SizedBox(width: 2),
-                            Text('스트리밍', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                          ],
-                        ),
-                      ),
-                    ],
+                  ],
+                )
+              : Row(
+                  children: [
+                    backButton,
+                    const SizedBox(width: 4),
+                    Expanded(child: titleSection),
+                    ..._buildTopBarActions(settingsService),
                   ],
                 ),
-                if (_pages.isNotEmpty)
-                  Text(
-                    '$pageLabel / ${_pages.length} 페이지  •  ${settingsService.settings.displayMode.label}',
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 12,
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          // AI 만화 번역 버튼 & 원본/번역 토글(눈 아이콘)
-          if (settingsService.settings.translationMode != ComicTranslationMode.off) ...[
-            IconButton(
-              icon: const Icon(Icons.translate, color: Colors.cyanAccent),
-              tooltip: '현재 페이지 번역 (또는 화면 길게 누르기)',
-              onPressed: _triggerManualTranslation,
-            ),
-            AnimatedBuilder(
-              animation: ComicTranslationService.instance,
-              builder: (context, _) {
-                final isVisible = ComicTranslationService.instance.isOverlayVisible;
-                return IconButton(
-                  icon: Icon(
-                    isVisible ? Icons.visibility : Icons.visibility_off,
-                    color: isVisible ? Colors.cyanAccent : Colors.white54,
-                  ),
-                  tooltip: isVisible ? '원본 그림 보기 (번역 숨김)' : '번역 오버레이 보기',
-                  onPressed: () {
-                    ComicTranslationService.instance.toggleOverlayVisibility();
-                    _showModeToast(isVisible ? '원본 그림 표시' : '번역 오버레이 표시');
-                  },
-                );
-              },
-            ),
-          ],
-          // 보기 모드 (자동 / 분할 / 합침 / 1페이지) 토글 버튼
-          IconButton(
-            icon: Icon(
-              settingsService.settings.displayMode.icon,
-              color: Colors.blueAccent,
-            ),
-            tooltip: '화면 보기 모드: ${settingsService.settings.displayMode.label}',
-            onPressed: () => _cycleDisplayMode(settingsService),
-          ),
-          // 읽기 방향 (우➔좌 ⇄ 좌➔우) 빠른 토글 버튼
-          IconButton(
-            icon: Icon(
-              settingsService.settings.readingDirection == ReadingDirection.rightToLeft
-                  ? Icons.format_textdirection_r_to_l
-                  : Icons.format_textdirection_l_to_r,
-              color: settingsService.settings.readingDirection == ReadingDirection.rightToLeft
-                  ? Colors.amberAccent
-                  : Colors.white,
-            ),
-            tooltip: settingsService.settings.readingDirection == ReadingDirection.rightToLeft
-                ? '읽기 방향: 우➔좌 (일본식) • 탭하여 변경'
-                : '읽기 방향: 좌➔우 (일반) • 탭하여 변경',
-            onPressed: () {
-              final newDir = settingsService.settings.readingDirection == ReadingDirection.rightToLeft
-                  ? ReadingDirection.leftToRight
-                  : ReadingDirection.rightToLeft;
-              settingsService.setReadingDirection(newDir);
-              _showModeToast(newDir == ReadingDirection.rightToLeft
-                  ? '읽기 방향: 우➔좌 (일본식)'
-                  : '읽기 방향: 좌➔우 (일반)');
-            },
-          ),
-          // 웹툰 <-> 페이지 모드 빠른 토글 버튼
-          IconButton(
-            icon: Icon(
-              settingsService.settings.viewerMode == ViewerMode.webtoon
-                  ? Icons.view_day
-                  : Icons.auto_stories,
-              color: Colors.white,
-            ),
-            tooltip: settingsService.settings.viewerMode == ViewerMode.webtoon
-                ? '페이지 모드로 전환'
-                : '웹툰 모드로 전환',
-            onPressed: () {
-              final newMode = settingsService.settings.viewerMode == ViewerMode.webtoon
-                  ? ViewerMode.singlePage
-                  : ViewerMode.webtoon;
-              settingsService.setViewerMode(newMode);
-            },
-          ),
-          // 뷰어 설정 버튼
-          IconButton(
-            icon: const Icon(Icons.tune, color: Colors.white),
-            tooltip: '뷰어 설정',
-            onPressed: () => ViewerSettingsDialog.show(context, settingsService),
-          ),
-          // 전체화면 토글 버튼 (Windows/Desktop 및 모바일)
-          IconButton(
-            icon: Icon(
-              _isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
-              color: Colors.white,
-            ),
-            tooltip: _isFullScreen ? '전체화면 종료 (Enter / ESC / F11)' : '전체화면 (Enter / F11)',
-            onPressed: _toggleFullScreen,
-          ),
-        ],
-      ),
+        );
+      },
     );
+  }
+
+  Widget _buildTopBarTitleSection(ViewerSettingsService settingsService, String pageLabel) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            Flexible(
+              child: Text(
+                _isFolderImageMode
+                    ? (_currentFolderName != null
+                        ? '$_currentFolderName (${_currentItem.name})'
+                        : _currentItem.name)
+                    : _currentItem.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            if (_isStreamed) ...[
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.blueAccent.withValues(alpha: 0.8),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.bolt, color: Colors.yellowAccent, size: 12),
+                    SizedBox(width: 2),
+                    Text('스트리밍', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+        if (_pages.isNotEmpty)
+          Text(
+            '$pageLabel / ${_pages.length} 페이지  •  ${settingsService.settings.displayMode.label}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 12,
+            ),
+          ),
+      ],
+    );
+  }
+
+  List<Widget> _buildTopBarActions(ViewerSettingsService settingsService, {bool compact = false}) {
+    final density = compact ? VisualDensity.compact : null;
+    final isRtl = settingsService.settings.readingDirection == ReadingDirection.rightToLeft;
+
+    return [
+      // AI 만화 번역 버튼 & 원본/번역 토글(눈 아이콘)
+      if (settingsService.settings.translationMode != ComicTranslationMode.off) ...[
+        IconButton(
+          visualDensity: density,
+          icon: const Icon(Icons.translate, color: Colors.cyanAccent),
+          tooltip: '현재 페이지 번역 (또는 화면 길게 누르기)',
+          onPressed: _triggerManualTranslation,
+        ),
+        AnimatedBuilder(
+          animation: ComicTranslationService.instance,
+          builder: (context, _) {
+            final isVisible = ComicTranslationService.instance.isOverlayVisible;
+            return IconButton(
+              visualDensity: density,
+              icon: Icon(
+                isVisible ? Icons.visibility : Icons.visibility_off,
+                color: isVisible ? Colors.cyanAccent : Colors.white54,
+              ),
+              tooltip: isVisible ? '원본 그림 보기 (번역 숨김)' : '번역 오버레이 보기',
+              onPressed: () {
+                ComicTranslationService.instance.toggleOverlayVisibility();
+                _showModeToast(isVisible ? '원본 그림 표시' : '번역 오버레이 표시');
+              },
+            );
+          },
+        ),
+      ],
+      // 보기 모드 (자동 / 분할 / 합침 / 1페이지) 토글 버튼
+      IconButton(
+        visualDensity: density,
+        icon: Icon(
+          settingsService.settings.displayMode.icon,
+          color: Colors.blueAccent,
+        ),
+        tooltip: '화면 보기 모드: ${settingsService.settings.displayMode.label}',
+        onPressed: () => _cycleDisplayMode(settingsService),
+      ),
+      // 읽기 방향 (우➔좌 ⇄ 좌➔우) 빠른 토글 버튼
+      IconButton(
+        visualDensity: density,
+        icon: Icon(
+          isRtl
+              ? Icons.format_textdirection_r_to_l
+              : Icons.format_textdirection_l_to_r,
+          color: isRtl ? Colors.amberAccent : Colors.white,
+        ),
+        tooltip: isRtl
+            ? '읽기 방향: 우➔좌 (일본식) • 탭하여 변경'
+            : '읽기 방향: 좌➔우 (일반) • 탭하여 변경',
+        onPressed: () {
+          final newDir = isRtl
+              ? ReadingDirection.leftToRight
+              : ReadingDirection.rightToLeft;
+          settingsService.setReadingDirection(newDir);
+          _showModeToast(newDir == ReadingDirection.rightToLeft
+              ? '읽기 방향: 우➔좌 (일본식)'
+              : '읽기 방향: 좌➔우 (일반)');
+        },
+      ),
+      // 웹툰 <-> 페이지 모드 빠른 토글 버튼
+      IconButton(
+        visualDensity: density,
+        icon: Icon(
+          settingsService.settings.viewerMode == ViewerMode.webtoon
+              ? Icons.view_day
+              : Icons.auto_stories,
+          color: Colors.white,
+        ),
+        tooltip: settingsService.settings.viewerMode == ViewerMode.webtoon
+            ? '페이지 모드로 전환'
+            : '웹툰 모드로 전환',
+        onPressed: () {
+          final newMode = settingsService.settings.viewerMode == ViewerMode.webtoon
+              ? ViewerMode.singlePage
+              : ViewerMode.webtoon;
+          settingsService.setViewerMode(newMode);
+        },
+      ),
+      // 뷰어 설정 버튼
+      IconButton(
+        visualDensity: density,
+        icon: const Icon(Icons.tune, color: Colors.white),
+        tooltip: '뷰어 설정',
+        onPressed: () => ViewerSettingsDialog.show(context, settingsService),
+      ),
+      // 전체화면 토글 버튼 (Windows/Desktop 및 모바일)
+      IconButton(
+        visualDensity: density,
+        icon: Icon(
+          _isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
+          color: Colors.white,
+        ),
+        tooltip: _isFullScreen ? '전체화면 종료 (Enter / ESC / F11)' : '전체화면 (Enter / F11)',
+        onPressed: _toggleFullScreen,
+      ),
+    ];
   }
 
   Widget _buildBottomBar(ViewerSettingsService settingsService) {
     final currentSettings = settingsService.settings;
     final hasPrevVol = _hasPrevVolume;
     final hasNextVol = _hasNextVolume;
+    final isRtl = currentSettings.readingDirection == ReadingDirection.rightToLeft;
+    final isWebtoon = currentSettings.viewerMode == ViewerMode.webtoon;
+    final maxDisplayIdx = _displayItems.isNotEmpty ? _displayItems.length - 1 : _pages.length - 1;
+    final hasPrevPage = isWebtoon ? _currentPageIndex > 0 : _currentDisplayIndex > 0;
+    final hasNextPage = isWebtoon ? _currentPageIndex < _pages.length - 1 : _currentDisplayIndex < maxDisplayIdx;
 
     return Container(
       decoration: const BoxDecoration(
@@ -1941,11 +2003,23 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
                 tooltip: '이전 권/파일',
                 onPressed: hasPrevVol ? () => _switchVolume(-1) : null,
               ),
-              // 이전 페이지
+              // 좌측 화살표 (일반: 이전 페이지 / 일본식 우➔좌: 다음 페이지)
               IconButton(
                 icon: const Icon(Icons.navigate_before, color: Colors.white),
-                tooltip: '이전 페이지',
-                onPressed: _currentPageIndex > 0 ? () => _jumpToPage(_currentPageIndex - 1) : null,
+                tooltip: isRtl ? '다음 페이지' : '이전 페이지',
+                onPressed: isRtl
+                    ? (hasNextPage
+                        ? () {
+                            _startHideControlsTimer();
+                            _goToNext();
+                          }
+                        : null)
+                    : (hasPrevPage
+                        ? () {
+                            _startHideControlsTimer();
+                            _goToPrevious();
+                          }
+                        : null),
               ),
               // 목차 및 전체 썸네일 그리드
               IconButton(
@@ -1962,13 +2036,23 @@ class _ComicViewerScreenState extends State<ComicViewerScreen> with WidgetsBindi
                   );
                 },
               ),
-              // 다음 페이지
+              // 우측 화살표 (일반: 다음 페이지 / 일본식 우➔좌: 이전 페이지)
               IconButton(
                 icon: const Icon(Icons.navigate_next, color: Colors.white),
-                tooltip: '다음 페이지',
-                onPressed: _currentPageIndex < _pages.length - 1
-                    ? () => _jumpToPage(_currentPageIndex + 1)
-                    : null,
+                tooltip: isRtl ? '이전 페이지' : '다음 페이지',
+                onPressed: isRtl
+                    ? (hasPrevPage
+                        ? () {
+                            _startHideControlsTimer();
+                            _goToPrevious();
+                          }
+                        : null)
+                    : (hasNextPage
+                        ? () {
+                            _startHideControlsTimer();
+                            _goToNext();
+                          }
+                        : null),
               ),
               // 다음 권
               IconButton(

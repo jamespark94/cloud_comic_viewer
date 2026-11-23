@@ -10,6 +10,7 @@ import 'comic_translation_cache.dart';
 import 'comic_translation_key_storage.dart';
 import 'comic_translator_engine.dart';
 import 'engines/cloud_vision_comic_translator.dart';
+import 'engines/free_google_comic_translator.dart';
 import 'engines/platform_translator_factory.dart';
 
 class _TranslationQueueTask {
@@ -42,7 +43,7 @@ class _TranslationQueueTask {
 /// 만화 AI 실시간 말풍선 번역 최상위 오케스트레이터 (Singleton & ChangeNotifier)
 ///
 /// - OFF 모드에서는 엔진을 메모리에 로드하지 않음 (Strict Lazy Initialization)
-/// - [로컬 무료 모드] 및 [클라우드 고품질 모드(Gemini Vision)] 전략 스위칭 지원
+/// - [로컬 오프라인(ML Kit)], [온라인 무료(로컬 OCR + 구글 번역)], [클라우드 AI(Gemini Vision)] 전략 스위칭 지원
 /// - 클라우드 자동 번역 시 페이지 체류 1.2초 이상일 때만 API를 호출(Debouncing)해 트래픽 폭주 방어
 /// - Single-Flight 직렬 큐로 동작하여 클라우드 Range 스트리밍 대역폭과 경쟁하지 않음
 class ComicTranslationService extends ChangeNotifier {
@@ -54,6 +55,7 @@ class ComicTranslationService extends ChangeNotifier {
 
   ComicTranslationService._internal({
     ComicTranslatorEngine? onDeviceEngine,
+    ComicTranslatorEngine? freeGoogleEngine,
     ComicTranslatorEngine? cloudEngine,
     ComicTranslationCache? cache,
     ComicTranslationKeyStorage? keyStorage,
@@ -61,6 +63,7 @@ class ComicTranslationService extends ChangeNotifier {
         _keyStorage = keyStorage ?? ComicTranslationKeyStorage.instance,
         cloudAutoDebounceDuration = defaultCloudAutoDebounceDuration {
     _onDeviceEngine = onDeviceEngine;
+    _freeGoogleEngine = freeGoogleEngine;
     _cloudEngine = cloudEngine;
   }
 
@@ -68,6 +71,7 @@ class ComicTranslationService extends ChangeNotifier {
   @visibleForTesting
   ComicTranslationService.forTesting({
     ComicTranslatorEngine? engine,
+    ComicTranslatorEngine? freeGoogleEngine,
     ComicTranslatorEngine? cloudEngine,
     ComicTranslationCache? cache,
     ComicTranslationKeyStorage? keyStorage,
@@ -75,10 +79,12 @@ class ComicTranslationService extends ChangeNotifier {
   })  : _cache = cache ?? ComicTranslationCache(),
         _keyStorage = keyStorage ?? ComicTranslationKeyStorage.inMemory() {
     _onDeviceEngine = engine;
+    _freeGoogleEngine = freeGoogleEngine;
     _cloudEngine = cloudEngine;
   }
 
   ComicTranslatorEngine? _onDeviceEngine;
+  ComicTranslatorEngine? _freeGoogleEngine;
   ComicTranslatorEngine? _cloudEngine;
   final ComicTranslationCache _cache;
   final ComicTranslationKeyStorage _keyStorage;
@@ -152,6 +158,12 @@ class ComicTranslationService extends ChangeNotifier {
     switch (engineType) {
       case ComicTranslationEngineType.onDevice:
         return _onDeviceEngine ??= createDefaultOnDeviceEngine();
+      case ComicTranslationEngineType.freeGoogle:
+        _onDeviceEngine ??= createDefaultOnDeviceEngine();
+        return _freeGoogleEngine ??= createDefaultFreeGoogleEngine(
+          onDeviceEngine: _onDeviceEngine,
+          onNotice: _emitNotice,
+        );
       case ComicTranslationEngineType.cloudVision:
         return _cloudEngine ??= CloudVisionComicTranslator(
           apiKeyProvider: () => _keyStorage.loadApiKey(),
@@ -400,7 +412,7 @@ class ComicTranslationService extends ChangeNotifier {
       return null;
     }
 
-    // 로컬 온디바이스 자동 번역: 즉시 현재 페이지 + 다음 1~2페이지 Pre-fetch
+    // 로컬 온디바이스 / 온라인 무료 구글 번역: 즉시 현재 페이지 + 다음 1~2페이지 Pre-fetch
     _scheduleAutoTranslationPages(
       bookId: bookId,
       visiblePages: visiblePages,
@@ -408,7 +420,7 @@ class ComicTranslationService extends ChangeNotifier {
       sourceLanguage: sourceLanguage,
       engineType: engineType,
       isRightToLeftManga: isRightToLeftManga,
-      prefetchCount: 2,
+      prefetchCount: engineType == ComicTranslationEngineType.freeGoogle ? 1 : 2,
     );
 
     return null;
@@ -474,7 +486,7 @@ class ComicTranslationService extends ChangeNotifier {
     _queuedOrInFlightKeys.clear();
     _translatingPages.clear();
 
-    for (final engine in [_onDeviceEngine, _cloudEngine]) {
+    for (final engine in [_onDeviceEngine, _freeGoogleEngine, _cloudEngine]) {
       if (engine != null) {
         try {
           await engine.dispose();
@@ -583,7 +595,12 @@ class ComicTranslationService extends ChangeNotifier {
           if (result == null) {
             result = await _executeTranslation(task);
             if (result != null) {
-              await _cache.put(result);
+              final engine = _ensureEngineInstance(task.engineType);
+              final shouldCache = engine is! FreeGoogleComicTranslator ||
+                  engine.shouldCacheLastResult;
+              if (shouldCache) {
+                await _cache.put(result);
+              }
             }
           }
         } on CloudVisionException catch (e) {

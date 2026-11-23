@@ -12,11 +12,24 @@ import '../bubble_clusterer.dart';
 import '../bubble_color_sampler.dart';
 import '../comic_translator_engine.dart';
 
-/// [Phase 1 온디바이스 무료 엔진 - Android & iPadOS 전용]
+/// 1단계 온디바이스 OCR + 말풍선 클러스터링 + 배경색 샘플링 추출 결과
+class ExtractedBubbleCandidate {
+  final ClusteredBubble cluster;
+  final BubbleColors colors;
+  final String detectedLanguageCode;
+
+  const ExtractedBubbleCandidate({
+    required this.cluster,
+    required this.colors,
+    required this.detectedLanguageCode,
+  });
+}
+
+/// [Phase 1 온디바이스 오프라인 무료 엔진 - Android & iPadOS 전용]
 /// 1. ML Kit TextRecognizer(일본어/영어/중국어)로 텍스트 라인 및 BoundingBox 추출
 /// 2. BubbleClusterer로 말풍선 단위 병합 (일본 만화 세로쓰기 우->좌 정렬)
 /// 3. BubbleColorSampler로 말풍선 테두리 픽셀 샘플링 기반 배경 대표색 추정
-/// 4. ML Kit OnDeviceTranslator (언어팩 다운로드 중에는 무료 translator 패키지 하이브리드 폴백)
+/// 4. ML Kit OnDeviceTranslator (언어팩 다운로드 중에는 무료 translator 패키지 폴백)
 class OnDeviceComicTranslator implements ComicTranslatorEngine {
   final Map<TextRecognitionScript, TextRecognizer> _recognizers = {};
   final Map<String, OnDeviceTranslator> _mlkitTranslators = {};
@@ -33,7 +46,7 @@ class OnDeviceComicTranslator implements ComicTranslatorEngine {
   String get engineId => 'on_device_mlkit_v1';
 
   @override
-  String get displayName => '온디바이스 ML Kit AI 번역';
+  String get displayName => '로컬 오프라인 (ML Kit)';
 
   @override
   bool get isSupported => Platform.isAndroid || Platform.isIOS;
@@ -55,8 +68,9 @@ class OnDeviceComicTranslator implements ComicTranslatorEngine {
     }
   }
 
-  @override
-  Future<List<TranslatedBubble>> translatePage(
+  /// 1단계: ML Kit OCR + 말풍선 병합(Clustering) + 배경색 샘플링 수행
+  /// ([FreeGoogleComicTranslator]에서도 동일 로직을 재사용합니다.)
+  Future<List<ExtractedBubbleCandidate>> extractBubbleCandidates(
     ComicPageTranslationRequest request,
   ) async {
     if (!isSupported || request.imageBytes.isEmpty) {
@@ -75,7 +89,7 @@ class OnDeviceComicTranslator implements ComicTranslatorEngine {
 
       var recognized = await _getRecognizer(script).processImage(inputImage);
 
-      // 자동 모드 & 좌->우 만화에서 라틴 OCR 결과가 없으면 중국어/일본어 OCR 재시도
+      // 자동 모드 & 좌->우 만화에서 라틴 OCR 결과가 없으면 일본어 OCR 재시도
       if (recognized.blocks.isEmpty &&
           request.sourceLanguage == ComicSourceLanguage.auto &&
           script == TextRecognitionScript.latin) {
@@ -112,6 +126,7 @@ class OnDeviceComicTranslator implements ComicTranslatorEngine {
         imageHeight: request.imageHeight,
         preferVerticalRtl: request.isRightToLeftManga ||
             request.sourceLanguage == ComicSourceLanguage.japanese,
+        sourceLanguage: request.sourceLanguage,
       );
 
       if (clusters.isEmpty) return const [];
@@ -122,49 +137,87 @@ class OnDeviceComicTranslator implements ComicTranslatorEngine {
         normalizedRects: clusters.map((c) => c.normalizedRect).toList(),
       );
 
-      // 말풍선별 한국어 번역 수행
-      final bubbles = <TranslatedBubble>[];
+      final candidates = <ExtractedBubbleCandidate>[];
       for (int i = 0; i < clusters.length; i++) {
         final cluster = clusters[i];
         final colors = sampledColors[i];
-
         final srcLangCode = _detectTextLanguage(
           cluster.mergedText,
           configured: request.sourceLanguage,
           isRtlManga: request.isRightToLeftManga,
         );
-
-        // 이미 한국어인 경우 번역 불필요
-        if (srcLangCode == request.targetLanguage) {
-          continue;
-        }
-
-        final translated = await _translateText(
-          cluster.mergedText,
-          fromCode: srcLangCode,
-          toCode: request.targetLanguage,
-        );
-
-        if (translated == null || translated.trim().isEmpty) continue;
-
-        bubbles.add(TranslatedBubble(
-          normalizedRect: cluster.normalizedRect,
-          originalText: cluster.mergedText,
-          translatedText: translated.trim(),
-          backgroundColor: colors.backgroundColor,
-          textColor: colors.textColor,
-          isVerticalSource: cluster.isVertical,
+        candidates.add(ExtractedBubbleCandidate(
+          cluster: cluster,
+          colors: colors,
+          detectedLanguageCode: srcLangCode,
         ));
       }
 
-      return bubbles;
+      return candidates;
     } catch (e) {
-      debugPrint('[OnDeviceComicTranslator] 페이지 번역 실패 (p.${request.pageIndex}): $e');
+      debugPrint(
+        '[OnDeviceComicTranslator] OCR 추출 실패 (p.${request.pageIndex}): $e',
+      );
       return const [];
     } finally {
       if (tempImgFile != null) {
         unawaited(tempImgFile.delete().catchError((_) => tempImgFile!));
       }
+    }
+  }
+
+  /// 이미 추출된 말풍선 후보 리스트를 로컬 오프라인(ML Kit) 엔진으로 번역합니다.
+  Future<List<TranslatedBubble>> translateCandidatesOffline(
+    ComicPageTranslationRequest request,
+    List<ExtractedBubbleCandidate> candidates, {
+    bool allowWebFallback = true,
+  }) async {
+    if (candidates.isEmpty) return const [];
+
+    final bubbles = <TranslatedBubble>[];
+    for (final candidate in candidates) {
+      // 이미 타겟 언어(한국어)인 경우 번역 불필요
+      if (candidate.detectedLanguageCode == request.targetLanguage) {
+        continue;
+      }
+
+      final translated = await _translateText(
+        candidate.cluster.mergedText,
+        fromCode: candidate.detectedLanguageCode,
+        toCode: request.targetLanguage,
+        allowWebFallback: allowWebFallback,
+      );
+
+      if (translated == null || translated.trim().isEmpty) continue;
+
+      bubbles.add(TranslatedBubble(
+        normalizedRect: candidate.cluster.normalizedRect,
+        originalText: candidate.cluster.mergedText,
+        translatedText: translated.trim(),
+        backgroundColor: candidate.colors.backgroundColor,
+        textColor: candidate.colors.textColor,
+        isVerticalSource: candidate.cluster.isVertical,
+      ));
+    }
+
+    return bubbles;
+  }
+
+  @override
+  Future<List<TranslatedBubble>> translatePage(
+    ComicPageTranslationRequest request,
+  ) async {
+    if (!isSupported || request.imageBytes.isEmpty) {
+      return const [];
+    }
+
+    try {
+      final candidates = await extractBubbleCandidates(request);
+      if (candidates.isEmpty) return const [];
+      return await translateCandidatesOffline(request, candidates);
+    } catch (e) {
+      debugPrint('[OnDeviceComicTranslator] 페이지 번역 실패 (p.${request.pageIndex}): $e');
+      return const [];
     }
   }
 
@@ -244,6 +297,12 @@ class OnDeviceComicTranslator implements ComicTranslatorEngine {
     if (RegExp(r'[\u4E00-\u9FFF]').hasMatch(text)) {
       return isRtlManga ? 'ja' : 'zh';
     }
+    if (RegExp(r'[¡¿ñÑ]').hasMatch(text)) {
+      return 'es';
+    }
+    if (RegExp(r'[\u00C0-\u024F]').hasMatch(text)) {
+      return 'auto';
+    }
     return 'en';
   }
 
@@ -251,6 +310,7 @@ class OnDeviceComicTranslator implements ComicTranslatorEngine {
     String text, {
     required String fromCode,
     required String toCode,
+    bool allowWebFallback = true,
   }) async {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return null;
@@ -281,9 +341,13 @@ class OnDeviceComicTranslator implements ComicTranslatorEngine {
         }
       }
     } else {
-      // 언어팩 미설치 시 백그라운드 다운로드 트리거 후 즉시 무료 translator 폴백 실행
+      // 언어팩 미설치 시 백그라운드 다운로드 트리거 후 필요 시 무료 translator 폴백 실행
       unawaited(_ensureModelInBackground(fromCode));
       unawaited(_ensureModelInBackground(toCode));
+    }
+
+    if (!allowWebFallback) {
+      return null;
     }
 
     // 2순위: 순수 Dart 무료 translator 폴백 (언어팩 다운로드 대기 시간 0ms)
